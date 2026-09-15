@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.util.List;
 
 @Service
 public class AccountServiceImpl implements AccountService {
@@ -38,6 +39,12 @@ public class AccountServiceImpl implements AccountService {
         this.accountRepository = accountRepository;
         this.transactionRepository = transactionRepository;
         this.userRepository = userRepository;
+    }
+
+    @Override
+    public List<AccountResponse> getMyAccounts() {
+        return accountRepository.findByUserEmailOrderByIdDesc(SecurityUtils.getCurrentUserEmail())
+                .stream().map(this::toAccountResponse).toList();
     }
 
     @Override

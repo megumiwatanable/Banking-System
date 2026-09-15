@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/account")
@@ -16,6 +17,11 @@ public class AccountController {
 
     public AccountController(AccountService accountService) {
         this.accountService = accountService;
+    }
+
+    @GetMapping
+    public ResponseEntity<List<AccountResponse>> getMyAccounts() {
+        return ResponseEntity.ok(accountService.getMyAccounts());
     }
 
     @PostMapping("/create")
