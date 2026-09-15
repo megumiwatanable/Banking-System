@@ -5,13 +5,13 @@ This document outlines the complete, verified data flow of the Spring Boot Banki
 ## High-Level Architecture
 
 The application is a **RESTful Spring Boot** backend with:
-- **Layered Architecture**: Controller → Service → Repository → Database (PostgreSQL)
+- **Layered Architecture**: Controller → Service → Repository → Database (MySQL)
 - **Security**: JWT + Rate Limiting (Bucket4j + Caffeine) + BCrypt
 - **Concurrency**: Pessimistic locking (`SELECT ... FOR UPDATE` with timeout) + Optimistic locking (`@Version`)
 - **Caching**: Spring Cache abstraction + Redis (recent addition)
 - **ORM**: JPA/Hibernate with entity relationships + Flyway migrations
 - **Validation**: Jakarta Bean Validation + Global Exception Handling
-- **Deployment**: Maven + Docker Compose (Postgres + Redis)
+- **Deployment**: Maven + Docker Compose (MySQL + Redis)
 
 ## Request-Response Data Flow (Typical HTTP Request)
 
@@ -65,7 +65,7 @@ HTTP Request (POST/GET/PUT)
         ├──► Queries + @Lock(PESSIMISTIC_WRITE) for critical paths
         │
         ▼
-  Database (PostgreSQL via Docker + Flyway)
+  Database (MySQL via Docker + Flyway)
         │
         ├──► Entities: User, Account (@Version), Transaction
         │
@@ -172,12 +172,12 @@ Every /api/** Request
 Spring Boot Startup
    │
    ├──► application.properties + application-dev.properties
-   │     (Redis, Postgres 5332, JWT, Swagger, virtual threads, Flyway)
+   │     (Redis, MySQL 3307, JWT, Swagger, virtual threads, Flyway)
    │
    ├──► SecurityConfig → PasswordEncoder + FilterChain
    ├──► WebConfig → Register RateLimitInterceptor
    ├──► JPA + Flyway + Redis auto-config
-   └──► Docker Compose (postgres + redis services)
+   └──► Docker Compose (mysql + redis services)
 ```
 
 ## Key Design Patterns & Best Practices

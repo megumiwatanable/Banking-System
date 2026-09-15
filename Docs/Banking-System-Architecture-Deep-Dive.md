@@ -1,7 +1,7 @@
 # Banking System - Deep Architecture Analysis
 
 **Project**: [Muhaimin-Mukammel/Banking-System](https://github.com/Muhaimin-Mukammel/Banking-System)  
-**Tech Stack**: Java 17, Spring Boot 3.5.x, PostgreSQL, Redis, JWT, etc.
+**Tech Stack**: Java 17, Spring Boot 3.5.x, MySQL, Redis, JWT, etc.
 
 This document provides a **progressive, layered explanation** of the architecture, starting from high-level patterns down to specific implementation details.
 
@@ -106,7 +106,7 @@ This follows the **Clean Architecture** principles to some extent (Dependency Ru
 ## 7. Configuration & DevOps Architecture
 
 - **Profile-based**: `application.properties` + `application-dev.properties`
-- **Docker Compose**: Postgres + Redis
+- **Docker Compose**: MySQL + Redis
 - **Flyway**: Versioned schema migrations
 - **Swagger/OpenAPI**: Auto-documented APIs
 

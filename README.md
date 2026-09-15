@@ -2,13 +2,13 @@
 
 # 🏦 Banking System
 
-**A production-grade backend banking engine built with Spring Boot 3, PostgreSQL, and Redis**
+**A production-grade backend banking engine built with Spring Boot 3, MySQL, and Redis**
 
 *JWT authentication · Deadlock-safe money transfers · Rate limiting · Distributed caching · Flyway-versioned schema*
 
 [![Java](https://img.shields.io/badge/Java-17-orange?logo=openjdk)](https://openjdk.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.16-brightgreen?logo=springboot)](https://spring.io/projects/spring-boot)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue?logo=postgresql)](https://www.postgresql.org/)
+[![MySQL](https://img.shields.io/badge/MySQL-8.4-blue?logo=mysql)](https://dev.mysql.com/)
 [![Redis](https://img.shields.io/badge/Redis-7-red?logo=redis)](https://redis.io/)
 [![Flyway](https://img.shields.io/badge/Flyway-versioned%20schema-CC0200?logo=flyway)](https://flywaydb.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
@@ -61,7 +61,7 @@ This is not a toy CRUD demo — it implements the two hardest problems in a bank
 ### 🏦 Account Management
 - Multiple accounts per user, typed as `SAVINGS` or `CURRENT`.
 - Cryptographically random 10-digit account numbers (`SecureRandom`), guaranteed unique via a retry loop against the database.
-- Balances are `NUMERIC(19,2)` end-to-end (Java `BigDecimal` ↔ Postgres `NUMERIC`) — **no floating-point money**.
+- Balances are `DECIMAL(19,2)` end-to-end (Java `BigDecimal` ↔ MySQL `DECIMAL`) — **no floating-point money**.
 - A database `CHECK` constraint prevents balances from ever going negative at the storage layer, independent of application logic.
 
 ### 💸 Transactions
@@ -105,7 +105,7 @@ flowchart TB
 
     subgraph Data["Persistence"]
         Repo["Spring Data JPA Repositories"]
-        PG[("PostgreSQL 16\nusers · accounts · transactions")]
+        PG[("MySQL 8.4\nusers · accounts · transactions")]
     end
 
     subgraph CacheLayer["Caching"]
@@ -135,7 +135,7 @@ flowchart TB
 | **Controller** | Thin HTTP adapters — validate the request body (`@Valid`), delegate to a service, map the result to a `ResponseEntity`. |
 | **Service** | All business rules live here: ownership checks, balance math, locking strategy, cache annotations, transaction boundaries (`@Transactional`). |
 | **Repository** | Spring Data JPA interfaces; one repository (`AccountRepository`) carries a custom `@Lock(PESSIMISTIC_WRITE)` query. |
-| **Database** | PostgreSQL enforces the invariants the application *should* uphold anyway (uniqueness, non-negative balances, referential integrity) as a last line of defense. |
+| **Database** | MySQL enforces the invariants the application *should* uphold anyway (uniqueness, non-negative balances, referential integrity) as a last line of defense. |
 
 ---
 
@@ -180,7 +180,7 @@ erDiagram
 
 - `ck_accounts_balance_non_negative` and `ck_transactions_amount_positive` are enforced **in the database**, not just in Java — a bug in application code cannot silently create a negative balance or a zero/negative-amount transaction.
 - `sender_account_id` / `receiver_account_id` are both nullable *by design*: a `DEPOSIT` has no sender, a `WITHDRAW` has no receiver, a `TRANSFER` has both. A `ck_transactions_parties_present` constraint guarantees at least one is always set.
-- Foreign keys use `ON DELETE CASCADE` (accounts → user) and `ON DELETE SET NULL` (transactions → accounts), so deleting a user cleans up their accounts, but historical transactions survive account deletion with a null reference rather than disappearing.
+- Accounts reference users with `ON DELETE CASCADE`. Transaction foreign keys use the default restrictive delete behavior: accounts referenced by transaction history cannot be deleted. This preserves the party-presence CHECK constraint under MySQL.
 - `idx_transactions_transaction_time DESC` supports the "most recent first" access pattern used by every transaction-history endpoint.
 
 ---
@@ -194,7 +194,7 @@ sequenceDiagram
     actor U as User
     participant C as UserController
     participant S as UserServiceImpl
-    participant DB as PostgreSQL
+    participant DB as MySQL
     participant J as JwtService
 
     U->>C: POST /api/user/register {fullName, email, password}
@@ -234,7 +234,7 @@ sequenceDiagram
     actor U as User
     participant C as AccountController
     participant S as AccountServiceImpl
-    participant DB as PostgreSQL
+    participant DB as MySQL
 
     U->>C: POST /api/account/{accountId}/transfer {receiveAccountId, amount}
     C->>S: transfer(accountId, request)
@@ -290,8 +290,8 @@ flowchart LR
 |---|---|---|
 | **Language / Runtime** | Java 17 | LTS release |
 | **Framework** | Spring Boot 3.5.16 | Web, Data JPA, Security, Validation starters |
-| **Database** | PostgreSQL 16 (Alpine) | Runs via Docker Compose on host port `5332` |
-| **Schema Migration** | Flyway (core + PostgreSQL dialect) | 3 versioned migrations, baseline-on-migrate enabled |
+| **Database** | MySQL 8.4 | Runs via Docker Compose on host port `3307` |
+| **Schema Migration** | Flyway (core + MySQL dialect) | 3 versioned migrations, baseline-on-migrate enabled |
 | **Cache** | Redis 7 (Alpine) via `spring-boot-starter-data-redis` | JSON serialization with polymorphic typing, 10-minute TTL |
 | **Auth** | JJWT 0.12.6 (`jjwt-api`/`impl`/`jackson`) | HMAC-SHA256, Base64-encoded 256-bit secret |
 | **Password Hashing** | Spring Security `BCryptPasswordEncoder` | |
@@ -301,7 +301,7 @@ flowchart LR
 | **Validation** | Jakarta Bean Validation | `@NotBlank`, `@Email`, `@Positive`, `@Size`, etc. on every request DTO |
 | **Boilerplate Reduction** | Lombok | `@Getter`/`@Setter`/`@NoArgsConstructor` on entities |
 | **Build** | Maven (with wrapper `mvnw`/`mvnw.cmd`) | |
-| **Containerization** | Docker Compose | PostgreSQL + Redis services |
+| **Containerization** | Docker Compose | MySQL + Redis services |
 | **Testing** | JUnit 5, Mockito, Spring Security Test, `@WebMvcTest` | 61 test methods across 11 files |
 
 ---
@@ -343,7 +343,7 @@ Banking-System/
 │       ├── V2__create_accounts_table.sql
 │       └── V3__create_transactions_table.sql
 ├── src/test/java/com/banking/             # 61 tests: controllers, services, security
-├── docker-compose.yml                     # PostgreSQL 16 + Redis 7
+├── docker-compose.yml                     # MySQL 8.4 + Redis 7
 ├── pom.xml
 ├── mvnw / mvnw.cmd
 └── LICENSE                                # Apache 2.0
@@ -356,7 +356,7 @@ Banking-System/
 ### Prerequisites
 - **Java 17+** (JDK 21+ recommended — see the virtual-threads note in [Limitations](#-known-limitations--findings))
 - **Maven 3.6+** (or use the bundled `./mvnw`)
-- **Docker & Docker Compose** (for PostgreSQL + Redis)
+- **Docker & Docker Compose** (for MySQL + Redis)
 
 ### 1. Clone the repository
 ```bash
@@ -364,12 +364,12 @@ git clone https://github.com/Muhaimin-Mukammel/Banking-System.git
 cd Banking-System
 ```
 
-### 2. Start infrastructure (PostgreSQL + Redis)
+### 2. Start infrastructure (MySQL + Redis)
 ```bash
 docker-compose up -d
 ```
 This starts:
-- **PostgreSQL 16** on host port `5332` → container `5432` (database `banking_system`, user/pass `postgres`/`postgres`)
+- **MySQL 8.4** on host port `3307` → container `3306` (database `banking_system`, user/pass `banking`/`banking`)
 - **Redis 7** on host port `6379`
 
 > On Docker Compose V2, use `docker compose` (no hyphen).
@@ -388,9 +388,9 @@ springdoc.swagger-ui.enabled=true
 
 `src/main/resources/application-dev.properties` (dev profile):
 ```properties
-spring.datasource.url=jdbc:postgresql://localhost:5332/banking_system
-spring.datasource.username=postgres
-spring.datasource.password=postgres
+spring.datasource.url=jdbc:mysql://localhost:3307/banking_system
+spring.datasource.username=banking
+spring.datasource.password=banking
 
 spring.jpa.hibernate.ddl-auto=validate     # Flyway owns the schema
 spring.flyway.baseline-on-migrate=true
@@ -521,7 +521,7 @@ Run everything:
 
 1. **The transfer-locking design is genuinely correct.** Ordered lock acquisition (`min(id)` → `max(id)`) to prevent deadlocks is a real production technique, not a toy simplification — a lot of portfolio banking projects get this exact scenario wrong.
 2. **Database-enforced invariants, not just application-layer trust.** `CHECK` constraints on balance and amount mean the schema itself refuses invalid states.
-3. **Money is `BigDecimal`/`NUMERIC(19,2)` everywhere** — no `double`/`float` rounding-error landmines.
+3. **Money is `BigDecimal`/`DECIMAL(19,2)` everywhere** — no `double`/`float` rounding-error landmines.
 4. **Flyway-first schema management** with descriptive column/table comments in the SQL itself, rather than letting Hibernate auto-generate (and silently drift) the schema.
 5. **Consistent, well-typed error handling.** One `@RestControllerAdvice`, one JSON error shape, precise HTTP status codes (`404`, `409`, `423`, `429`, etc.) instead of blanket `500`s.
 6. **Real rate limiting**, not a decorative annotation — token-bucket semantics via Bucket4j, per-identity keying, and a correct `Retry-After` header.
@@ -589,6 +589,16 @@ Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE) for the ful
 
 **Author:** Muhaimin Mukammel
 
-*Java · Spring Boot · Spring Security · JPA/Hibernate · PostgreSQL · Redis · Flyway · JWT · Docker · Bucket4j*
+*Java · Spring Boot · Spring Security · JPA/Hibernate · MySQL · Redis · Flyway · JWT · Docker · Bucket4j*
 
 </div>
+## MySQL local setup
+
+```bash
+docker compose up -d --wait
+./mvnw spring-boot:run
+```
+
+Connect using host `localhost`, port `3307`, database `banking_system`, username `banking`, password `banking`. Redis uses port `6379`. Flyway creates the tables on application startup. MySQL data persists in the `mysql-data` volume. These migrations initialize a fresh MySQL database; they do not migrate existing PostgreSQL data. Existing PostgreSQL volumes are not removed. Ports 3307 and 6379 must be available.
+
+MySQL uses InnoDB, native ENUM columns, DECIMAL money values, and DATETIME(6) transaction timestamps. Each application connection sets `innodb_lock_wait_timeout=5`. Transaction account references restrict deletion instead of using SET NULL because MySQL disallows that referential action on columns used by CHECK constraints.
