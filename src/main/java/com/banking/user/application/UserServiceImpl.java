@@ -13,6 +13,7 @@ import com.banking.user.api.dto.UpdateProfileRequest;
 import com.banking.user.api.dto.UserResponse;
 import com.banking.user.domain.User;
 import com.banking.user.infrastructure.UserRepository;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class UserServiceImpl implements UserService {
+  private static final String USER_CACHE = "userCacheV2";
 
   private final UserRepository userRepository;
   private final PasswordEncoder passwordEncoder;
@@ -73,7 +75,7 @@ public class UserServiceImpl implements UserService {
 
   @Override
   @Cacheable(
-      value = "userCahce",
+      value = USER_CACHE,
       key = "T(com.banking.shared.security.SecurityUtils).getCurrentUserEmail()")
   public UserResponse getCurrentUser() {
     return toUserResponse(getCurrentUserEntity());
@@ -81,6 +83,9 @@ public class UserServiceImpl implements UserService {
 
   @Override
   @Transactional
+  @CacheEvict(
+      value = USER_CACHE,
+      key = "T(com.banking.shared.security.SecurityUtils).getCurrentUserEmail()")
   public UserResponse updateProfile(UpdateProfileRequest request) {
     User user = getCurrentUserEntity();
 

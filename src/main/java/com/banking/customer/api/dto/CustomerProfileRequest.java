@@ -6,6 +6,9 @@ import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 
 public record CustomerProfileRequest(
-    @Pattern(regexp = "[0-9+]{8,20}") String phoneNumber,
+    @Pattern(
+            regexp = "^\\+?[0-9]{8,15}$",
+            message = "Phone number must contain 8 to 15 digits and may start with +")
+        String phoneNumber,
     @Size(max = 500) String address,
     @Past LocalDate dateOfBirth) {}

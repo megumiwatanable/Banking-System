@@ -18,10 +18,7 @@ public class RedisCacheConfig {
   public RedisCacheManager cacheManager(
       RedisConnectionFactory redisConnectionFactory, ObjectMapper objectMapper) {
 
-    ObjectMapper mapper = objectMapper.copy();
-
-    mapper.activateDefaultTyping(
-        mapper.getPolymorphicTypeValidator(), ObjectMapper.DefaultTyping.NON_FINAL);
+    ObjectMapper mapper = createCacheObjectMapper(objectMapper);
 
     GenericJackson2JsonRedisSerializer serializer = new GenericJackson2JsonRedisSerializer(mapper);
 
@@ -36,5 +33,16 @@ public class RedisCacheConfig {
                 RedisSerializationContext.SerializationPair.fromSerializer(serializer));
 
     return RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(configuration).build();
+  }
+
+  static ObjectMapper createCacheObjectMapper(ObjectMapper objectMapper) {
+    ObjectMapper mapper = objectMapper.copy();
+
+    // Cached API responses are records, which are final classes. Type metadata must also be
+    // written for final values so Redis can deserialize them to the response type instead of a
+    // LinkedHashMap.
+    mapper.activateDefaultTyping(
+        mapper.getPolymorphicTypeValidator(), ObjectMapper.DefaultTyping.EVERYTHING);
+    return mapper;
   }
 }

@@ -32,7 +32,7 @@ public class TransactionServiceImpl implements TransactionService {
 
   @Override
   @Cacheable(
-      value = "allTransactions",
+      value = "allTransactionsV2",
       key = "T(com.banking.shared.security.SecurityUtils).getCurrentUserEmail()")
   public List<TransactionResponse> getAllTransactions() {
 
@@ -47,7 +47,7 @@ public class TransactionServiceImpl implements TransactionService {
 
   @Override
   @Cacheable(
-      value = "transactionById",
+      value = "transactionByIdV2",
       key =
           "#transactionId + ':' +"
               + " T(com.banking.shared.security.SecurityUtils).getCurrentUserEmail()")
@@ -77,7 +77,7 @@ public class TransactionServiceImpl implements TransactionService {
 
   @Override
   @Cacheable(
-      value = "transactionsByAccount",
+      value = "transactionsByAccountV2",
       key = "#accountId + ':' + T(com.banking.shared.security.SecurityUtils).getCurrentUserEmail()")
   public List<TransactionResponse> getTransactionForAcc(Long accountId) {
     Account account =

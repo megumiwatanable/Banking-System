@@ -19,6 +19,7 @@ import com.banking.user.domain.User;
 import com.banking.user.infrastructure.UserRepository;
 import java.security.SecureRandom;
 import java.util.List;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -26,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AccountServiceImpl implements AccountService {
+  private static final String ACCOUNT_CACHE = "accountCacheV2";
 
   private final AccountRepository accountRepository;
   private final TransactionRepository transactionRepository;
@@ -52,6 +54,7 @@ public class AccountServiceImpl implements AccountService {
 
   @Override
   @Transactional
+  @CacheEvict(value = ACCOUNT_CACHE, allEntries = true)
   public AccountResponse create(CreateAccountRequest request) {
     User currentUser = getCurrentUserEntity();
 
@@ -64,7 +67,7 @@ public class AccountServiceImpl implements AccountService {
 
   @Override
   @Cacheable(
-      value = "accountCache",
+      value = ACCOUNT_CACHE,
       key = "#accountId + ':' + T(com.banking.shared.security.SecurityUtils).getCurrentUserEmail()")
   public AccountResponse getAccountById(Long accountId) {
     Account account = getOwnedAccount(accountId);
@@ -73,6 +76,9 @@ public class AccountServiceImpl implements AccountService {
 
   @Override
   @Transactional
+  @CacheEvict(
+      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      allEntries = true)
   public AccountResponse deposit(Long accountId, DepositRequest request) {
     User currentUser = getCurrentUserEntity();
     Account account = getOwnedAccountForUpdate(accountId, currentUser);
@@ -90,6 +96,9 @@ public class AccountServiceImpl implements AccountService {
 
   @Override
   @Transactional
+  @CacheEvict(
+      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      allEntries = true)
   public AccountResponse withdraw(Long accountId, WithdrawRequest request) {
     User currentUser = getCurrentUserEntity();
     Account account = getOwnedAccountForUpdate(accountId, currentUser);
@@ -111,6 +120,9 @@ public class AccountServiceImpl implements AccountService {
 
   @Override
   @Transactional
+  @CacheEvict(
+      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      allEntries = true)
   public AccountResponse transfer(TransferRequest request) {
     if (request.senderAccountNumber().equals(request.receiverAccountNumber())) {
       throw new InvalidAccountOperationException("Cannot transfer to the same account");
@@ -164,6 +176,9 @@ public class AccountServiceImpl implements AccountService {
 
   @Override
   @Transactional
+  @CacheEvict(
+      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      allEntries = true)
   public InterbankTransferResponse requestInterbankTransfer(InterbankTransferRequest request) {
     User currentUser = getCurrentUserEntity();
     Account sender =
