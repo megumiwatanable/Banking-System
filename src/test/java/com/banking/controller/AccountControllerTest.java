@@ -2,6 +2,7 @@ package com.banking.controller;
 
 import com.banking.dto.account.*;
 import com.banking.model.AccountType;
+import com.banking.model.TransactionStatus;
 import com.banking.security.JwtAuthenticationFilter;
 import com.banking.security.JwtService;
 import com.banking.service.AccountService;
@@ -53,7 +54,7 @@ public class AccountControllerTest {
     // Constants
 
     private final BigDecimal BALANCE = BigDecimal.valueOf(100000);
-    private final Long RECEIVE_ACCOUNT_NO = Long.valueOf(12345);
+    private final String RECEIVE_ACCOUNT_NO = "1234567890";
     private final String ACCOUNT_NUMBER = "qwert";
     private final Long ID = Long.valueOf(23);
     private final AccountType ACCOUNT_TYPE = AccountType.CURRENT;
@@ -65,7 +66,7 @@ public class AccountControllerTest {
 
         createAccountRequest = new CreateAccountRequest(ACCOUNT_TYPE);
         depositRequest = new DepositRequest(AMOUNT);
-        transferRequest = new TransferRequest(RECEIVE_ACCOUNT_NO, AMOUNT);
+        transferRequest = new TransferRequest("1000000023", RECEIVE_ACCOUNT_NO, AMOUNT);
         withdrawRequest = new WithdrawRequest(AMOUNT);
         accountResponse = new AccountResponse(ID, ACCOUNT_NUMBER, ACCOUNT_TYPE, BALANCE);
     }
@@ -116,11 +117,26 @@ public class AccountControllerTest {
 
     @Test
     void transfer_shouldReturnOk() throws Exception {
-        when(accountService.transfer(ID, transferRequest)).thenReturn(accountResponse);
+        when(accountService.transfer(transferRequest)).thenReturn(accountResponse);
 
-        mockMvc.perform(post("/api/account/{accountId}/transfer", ID)
+        mockMvc.perform(post("/api/account/transfer")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void interbankTransfer_shouldReturnPendingWithoutClaimingSettlement() throws Exception {
+        var request = new InterbankTransferRequest("1000000023", "VCB", "0123456789", "Nguyen Van B", AMOUNT);
+        var response = new InterbankTransferResponse(42L, "1000000023", "VCB", "0123456789",
+                "Nguyen Van B", AMOUNT, TransactionStatus.PENDING);
+        when(accountService.requestInterbankTransfer(request)).thenReturn(response);
+
+        mockMvc.perform(post("/api/account/transfer/interbank")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.transactionId").value(42));
     }
 }

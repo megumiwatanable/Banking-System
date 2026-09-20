@@ -98,7 +98,7 @@ public class TransactionServiceImpl implements TransactionService {
                 transaction.getSenderAccount() != null
                         ? transaction.getSenderAccount().getAccountNumber() : null,
                 transaction.getReceiverAccount() != null
-                        ? transaction.getReceiverAccount().getAccountNumber() : null,
+                        ? transaction.getReceiverAccount().getAccountNumber() : transaction.getExternalAccountNumber(),
                 transaction.getTransactionTime(),
                 transaction.getStatus()
         );

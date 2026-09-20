@@ -57,11 +57,17 @@ public class AccountController {
     }
 
     @RateLimit(capacity = 20, refillTokens = 20, refillPeriodSeconds = 60)
-    @PostMapping("/{accountId}/transfer")
-    public ResponseEntity<AccountResponse> transfer(
-            @PathVariable Long accountId,
-            @Valid @RequestBody TransferRequest request){
-        AccountResponse response = accountService.transfer(accountId, request);
+    @PostMapping("/transfer")
+    public ResponseEntity<AccountResponse> transfer(@Valid @RequestBody TransferRequest request){
+        AccountResponse response = accountService.transfer(request);
         return ResponseEntity.ok(response);
+    }
+
+    @RateLimit(capacity = 20, refillTokens = 20, refillPeriodSeconds = 60)
+    @PostMapping("/transfer/interbank")
+    public ResponseEntity<InterbankTransferResponse> requestInterbankTransfer(
+            @Valid @RequestBody InterbankTransferRequest request) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(accountService.requestInterbankTransfer(request));
     }
 }

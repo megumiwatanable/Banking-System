@@ -15,6 +15,8 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
 
     boolean existsByAccountNumber(String accountNumber);
 
+    Optional<Account> findByAccountNumber(String accountNumber);
+
     List<Account> findByUserEmailOrderByIdDesc(String email);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

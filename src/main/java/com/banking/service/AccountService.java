@@ -14,5 +14,7 @@ public interface AccountService {
 
     AccountResponse withdraw(Long accountId, @Valid WithdrawRequest request);
 
-    AccountResponse transfer(Long accountId, @Valid TransferRequest request);
+    AccountResponse transfer(@Valid TransferRequest request);
+
+    InterbankTransferResponse requestInterbankTransfer(@Valid InterbankTransferRequest request);
 }

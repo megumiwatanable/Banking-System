@@ -3,6 +3,8 @@ package com.banking.service.impl;
 import com.banking.dto.account.AccountResponse;
 import com.banking.dto.account.CreateAccountRequest;
 import com.banking.dto.account.DepositRequest;
+import com.banking.dto.account.InterbankTransferRequest;
+import com.banking.dto.account.InterbankTransferResponse;
 import com.banking.dto.account.TransferRequest;
 import com.banking.dto.account.WithdrawRequest;
 import com.banking.exception.*;
@@ -105,21 +107,30 @@ public class AccountServiceImpl implements AccountService {
 
     @Override
     @Transactional
-    public AccountResponse transfer(Long accountId, TransferRequest request) {
-        if (accountId.equals(request.receiveAccountId())) {
+    public AccountResponse transfer(TransferRequest request) {
+        if (request.senderAccountNumber().equals(request.receiverAccountNumber())) {
             throw new InvalidAccountOperationException("Cannot transfer to the same account");
         }
 
         User currentUser = getCurrentUserEntity();
 
-        Long firstId = Math.min(accountId, request.receiveAccountId());
-        Long secondId = Math.max(accountId, request.receiveAccountId());
+        Account senderReference = accountRepository.findByAccountNumber(request.senderAccountNumber())
+                .orElseThrow(() -> new ResourceNotFoundException("Sender account not found"));
+        if (!senderReference.getUser().getId().equals(currentUser.getId())) {
+            throw new UnauthorizedAccessException("You do not have access to this account");
+        }
+
+        Account receiverReference = accountRepository.findByAccountNumber(request.receiverAccountNumber())
+                .orElseThrow(() -> new ResourceNotFoundException("Receiver account not found"));
+
+        Long firstId = Math.min(senderReference.getId(), receiverReference.getId());
+        Long secondId = Math.max(senderReference.getId(), receiverReference.getId());
 
         Account first = lockAccountOrThrow(firstId);
         Account second = lockAccountOrThrow(secondId);
 
-        Account sender = accountId.equals(firstId) ? first : second;
-        Account receiver = accountId.equals(firstId) ? second : first;
+        Account sender = senderReference.getId().equals(firstId) ? first : second;
+        Account receiver = senderReference.getId().equals(firstId) ? second : first;
 
         if (!sender.getUser().getId().equals(currentUser.getId())) {
             throw new UnauthorizedAccessException("You do not have access to this account");
@@ -141,6 +152,28 @@ public class AccountServiceImpl implements AccountService {
         transactionRepository.save(transaction);
 
         return toAccountResponse(sender);
+    }
+
+    @Override
+    @Transactional
+    public InterbankTransferResponse requestInterbankTransfer(InterbankTransferRequest request) {
+        User currentUser = getCurrentUserEntity();
+        Account sender = accountRepository.findByAccountNumber(request.senderAccountNumber())
+                .orElseThrow(() -> new ResourceNotFoundException("Sender account not found"));
+        if (!sender.getUser().getId().equals(currentUser.getId())) {
+            throw new UnauthorizedAccessException("You do not have access to this account");
+        }
+
+        Transaction transaction = new Transaction(TransactionType.INTERBANK_TRANSFER,
+                request.amount(), sender, null);
+        transaction.setExternalBankCode(request.bankCode().trim().toUpperCase());
+        transaction.setExternalAccountNumber(request.receiverAccountNumber().trim());
+        transaction.setExternalRecipientName(request.recipientName().trim());
+        Transaction saved = transactionRepository.save(transaction);
+
+        return new InterbankTransferResponse(saved.getId(), sender.getAccountNumber(),
+                saved.getExternalBankCode(), saved.getExternalAccountNumber(),
+                saved.getExternalRecipientName(), saved.getAmount(), saved.getStatus());
     }
 
     private Account getOwnedAccount(Long accountId) {

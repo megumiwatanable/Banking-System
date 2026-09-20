@@ -2,8 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
-import { forkJoin } from 'rxjs';
-import { Account, ApiError, ApiService, Transaction, User } from './api.service';
+import { forkJoin, Observable } from 'rxjs';
+import { Account, ApiError, ApiService, InterbankTransferResponse, Transaction, User } from './api.service';
 
 type Page = 'overview' | 'accounts' | 'transactions' | 'profile';
 type Action = 'deposit' | 'withdraw' | 'transfer';
@@ -19,8 +19,11 @@ export class AppComponent implements OnInit {
   transactions: Transaction[] = [];
   selectedAccountId: number | null = null;
   action: Action | null = null;
+  transferMode: 'internal' | 'interbank' = 'internal';
   amount: number | null = null;
-  receiveAccountId: number | null = null;
+  receiveAccountNumber = '';
+  bankCode = '';
+  recipientName = '';
   newAccountType: Account['accountType'] = 'CURRENT';
   profileForm = { fullName: '', email: '', currentPass: '', newPass: '' };
   busy = false;
@@ -39,11 +42,11 @@ export class AppComponent implements OnInit {
       ? this.transactions.filter(t => t.senderAccountNumber === number || t.receiverAccountNumber === number)
       : this.transactions;
   }
-  get income() { return this.transactions.filter(t => this.isIncoming(t)).reduce((sum, t) => sum + Number(t.amount), 0); }
-  get outgoing() { return this.transactions.filter(t => !this.isIncoming(t)).reduce((sum, t) => sum + Number(t.amount), 0); }
+  get income() { return this.transactions.filter(t => t.status === 'SUCCESS' && this.isIncoming(t)).reduce((sum, t) => sum + Number(t.amount), 0); }
+  get outgoing() { return this.transactions.filter(t => t.status === 'SUCCESS' && !this.isIncoming(t)).reduce((sum, t) => sum + Number(t.amount), 0); }
 
   isIncoming(t: Transaction) { return t.transactionType === 'DEPOSIT' || (t.transactionType === 'TRANSFER' && this.accounts.some(a => a.accountNumber === t.receiverAccountNumber) && !this.accounts.some(a => a.accountNumber === t.senderAccountNumber)); }
-  transactionLabel(t: Transaction) { return t.transactionType === 'DEPOSIT' ? 'Nạp tiền' : t.transactionType === 'WITHDRAW' ? 'Rút tiền' : this.isIncoming(t) ? 'Nhận chuyển khoản' : 'Chuyển tiền'; }
+  transactionLabel(t: Transaction) { return t.transactionType === 'DEPOSIT' ? 'Nạp tiền' : t.transactionType === 'WITHDRAW' ? 'Rút tiền' : t.transactionType === 'INTERBANK_TRANSFER' ? 'Yêu cầu liên ngân hàng' : this.isIncoming(t) ? 'Nhận chuyển khoản' : 'Chuyển tiền'; }
   initials(name: string) { return name.split(' ').slice(-2).map(part => part[0]?.toUpperCase()).join(''); }
 
   authenticate() {
@@ -88,12 +91,19 @@ export class AppComponent implements OnInit {
     if (!this.action || !this.selectedAccountId) return;
     this.clearMessages();
     if (!this.amount || this.amount <= 0 || !Number.isFinite(this.amount)) { this.error = 'Số tiền phải lớn hơn 0.'; return; }
-    if (this.action === 'transfer' && (!this.receiveAccountId || this.receiveAccountId === this.selectedAccountId)) { this.error = 'Nhập ID tài khoản nhận khác tài khoản gửi.'; return; }
+    if (this.action === 'transfer' && !this.receiveAccountNumber.trim()) { this.error = 'Nhập số tài khoản nhận.'; return; }
+    if (this.action === 'transfer' && this.transferMode === 'internal' && this.receiveAccountNumber.trim() === this.selectedAccount?.accountNumber) { this.error = 'Tài khoản nhận phải khác tài khoản gửi.'; return; }
+    if (this.action === 'transfer' && this.transferMode === 'interbank' && (!this.bankCode.trim() || !this.recipientName.trim())) { this.error = 'Nhập ngân hàng và tên người nhận.'; return; }
     this.busy = true;
     const label = this.action === 'deposit' ? 'Nạp tiền' : this.action === 'withdraw' ? 'Rút tiền' : 'Chuyển tiền';
-    this.api.money(this.selectedAccountId, this.action, this.amount, this.receiveAccountId ?? undefined).subscribe({
-      next: () => { this.busy = false; this.action = null; this.amount = null; this.receiveAccountId = null; this.notice = `${label} thành công.`; this.load(); },
-      error: e => this.fail(e)
+    const request: Observable<Account | InterbankTransferResponse> = this.action === 'transfer'
+      ? this.transferMode === 'internal'
+        ? this.api.transfer(this.selectedAccount!.accountNumber, this.receiveAccountNumber.trim(), this.amount)
+        : this.api.interbankTransfer(this.selectedAccount!.accountNumber, this.bankCode.trim(), this.receiveAccountNumber.trim(), this.recipientName.trim(), this.amount)
+      : this.api.money(this.selectedAccountId, this.action, this.amount);
+    request.subscribe({
+      next: () => { this.busy = false; this.action = null; this.amount = null; this.receiveAccountNumber = ''; this.notice = this.transferMode === 'interbank' && label === 'Chuyển tiền' ? 'Đã ghi nhận yêu cầu mô phỏng. Chưa trừ tiền và chưa gửi đến ngân hàng nhận.' : `${label} thành công.`; this.load(); },
+      error: (e: HttpErrorResponse) => this.fail(e)
     });
   }
 
@@ -107,7 +117,7 @@ export class AppComponent implements OnInit {
     this.api.changePassword(this.profileForm.currentPass, this.profileForm.newPass).subscribe({ next: () => { this.busy = false; this.profileForm.currentPass = ''; this.profileForm.newPass = ''; this.notice = 'Đã đổi mật khẩu.'; }, error: e => this.fail(e) });
   }
   show(page: Page) { this.page = page; this.clearMessages(); }
-  openAction(action: Action) { this.action = action; this.amount = null; this.receiveAccountId = null; this.clearMessages(); }
+  openAction(action: Action) { this.action = action; this.transferMode = 'internal'; this.amount = null; this.receiveAccountNumber = ''; this.bankCode = ''; this.recipientName = ''; this.clearMessages(); }
   logout() { sessionStorage.removeItem('banking_token'); this.user = null; this.accounts = []; this.transactions = []; this.page = 'overview'; this.action = null; }
   private clearMessages() { this.error = ''; this.notice = ''; }
   private fail(error: HttpErrorResponse) { this.busy = false; this.error = (error.error as ApiError)?.validationErrors?.join(' · ') || (error.error as ApiError)?.message || 'Không thể kết nối máy chủ. Vui lòng thử lại.'; }

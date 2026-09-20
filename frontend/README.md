@@ -13,4 +13,6 @@ The Angular dev server proxies `/api` to `http://localhost:8081`, so no browser 
 
 The repository also includes an optional `docker-compose.yml` for a separate MySQL/Redis pair on host ports `3307` and `6380`. You do not need to start it when using your existing containers.
 
-For transfers, enter the recipient's **account ID**. The current backend transfer endpoint accepts `receiveAccountId`, not an account number. The backend does not expose recipient account lookup by account number.
+For transfers inside Moneta, select your source account and enter the recipient's **10-digit account number**. The backend moves funds between the two accounts atomically.
+
+The interbank form is a simulation until a payment provider is integrated. It records a `PENDING` request with the bank code, recipient name, account number, and amount. It does **not** debit the sender or send money to an external bank.

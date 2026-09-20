@@ -3,6 +3,7 @@ package com.banking.service;
 import com.banking.dto.account.CreateAccountRequest;
 import com.banking.dto.account.DepositRequest;
 import com.banking.dto.account.TransferRequest;
+import com.banking.dto.account.InterbankTransferRequest;
 import com.banking.dto.account.WithdrawRequest;
 import com.banking.exception.AccountLockTimeoutException;
 import com.banking.exception.InsufficientBalanceException;
@@ -12,6 +13,8 @@ import com.banking.exception.UnauthorizedAccessException;
 import com.banking.model.Account;
 import com.banking.model.AccountType;
 import com.banking.model.User;
+import com.banking.model.Transaction;
+import com.banking.model.TransactionStatus;
 import com.banking.repository.AccountRepository;
 import com.banking.repository.TransactionRepository;
 import com.banking.repository.UserRepository;
@@ -182,7 +185,7 @@ class AccountServiceImplTest {
         loginAs(owner);
 
         assertThrows(InvalidAccountOperationException.class,
-                () -> accountService.transfer(5L, new TransferRequest(5L, new BigDecimal("10.00"))));
+                () -> accountService.transfer(new TransferRequest("1000000005", "1000000005", new BigDecimal("10.00"))));
 
         verify(accountRepository, never()).findByIdForUpdate(anyLong());
     }
@@ -194,9 +197,11 @@ class AccountServiceImplTest {
         Account receiver = accountFor(3L, otherUser, new BigDecimal("50.00"));
         when(accountRepository.findByIdForUpdate(3L)).thenReturn(Optional.of(receiver));
         when(accountRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sender));
+        when(accountRepository.findByAccountNumber(sender.getAccountNumber())).thenReturn(Optional.of(sender));
+        when(accountRepository.findByAccountNumber(receiver.getAccountNumber())).thenReturn(Optional.of(receiver));
         when(accountRepository.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        accountService.transfer(9L, new TransferRequest(3L, new BigDecimal("25.00")));
+        accountService.transfer(new TransferRequest(sender.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("25.00")));
 
         var inOrder = Mockito.inOrder(accountRepository);
         inOrder.verify(accountRepository).findByIdForUpdate(3L);
@@ -208,11 +213,10 @@ class AccountServiceImplTest {
         loginAs(owner);
         Account sender = accountFor(3L, otherUser, new BigDecimal("200.00"));
         Account receiver = accountFor(9L, owner, new BigDecimal("50.00"));
-        when(accountRepository.findByIdForUpdate(3L)).thenReturn(Optional.of(sender));
-        when(accountRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(receiver));
+        when(accountRepository.findByAccountNumber(sender.getAccountNumber())).thenReturn(Optional.of(sender));
 
         assertThrows(UnauthorizedAccessException.class,
-                () -> accountService.transfer(3L, new TransferRequest(9L, new BigDecimal("10.00"))));
+                () -> accountService.transfer(new TransferRequest(sender.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("10.00"))));
 
         verify(accountRepository, never()).save(any());
     }
@@ -224,9 +228,11 @@ class AccountServiceImplTest {
         Account receiver = accountFor(9L, otherUser, new BigDecimal("50.00"));
         when(accountRepository.findByIdForUpdate(3L)).thenReturn(Optional.of(sender));
         when(accountRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(receiver));
+        when(accountRepository.findByAccountNumber(sender.getAccountNumber())).thenReturn(Optional.of(sender));
+        when(accountRepository.findByAccountNumber(receiver.getAccountNumber())).thenReturn(Optional.of(receiver));
 
         assertThrows(InsufficientBalanceException.class,
-                () -> accountService.transfer(3L, new TransferRequest(9L, new BigDecimal("40.00"))));
+                () -> accountService.transfer(new TransferRequest(sender.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("40.00"))));
     }
 
     @Test
@@ -236,12 +242,34 @@ class AccountServiceImplTest {
         Account receiver = accountFor(9L, otherUser, new BigDecimal("50.00"));
         when(accountRepository.findByIdForUpdate(3L)).thenReturn(Optional.of(sender));
         when(accountRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(receiver));
+        when(accountRepository.findByAccountNumber(sender.getAccountNumber())).thenReturn(Optional.of(sender));
+        when(accountRepository.findByAccountNumber(receiver.getAccountNumber())).thenReturn(Optional.of(receiver));
         when(accountRepository.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        var response = accountService.transfer(3L, new TransferRequest(9L, new BigDecimal("30.00")));
+        var response = accountService.transfer(new TransferRequest(sender.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("30.00")));
 
         assertEquals(new BigDecimal("70.00"), response.balance());
         assertEquals(new BigDecimal("80.00"), receiver.getBalance());
         verify(transactionRepository).save(any());
+    }
+
+    @Test
+    void interbankRequestIsPendingAndDoesNotDebitSender() {
+        loginAs(owner);
+        Account sender = accountFor(3L, owner, new BigDecimal("100.00"));
+        when(accountRepository.findByAccountNumber(sender.getAccountNumber())).thenReturn(Optional.of(sender));
+        when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> {
+            Transaction transaction = inv.getArgument(0);
+            transaction.setId(42L);
+            return transaction;
+        });
+
+        var response = accountService.requestInterbankTransfer(new InterbankTransferRequest(
+                sender.getAccountNumber(), "VCB", "0123456789", "Nguyen Van B", new BigDecimal("30.00")));
+
+        assertEquals(TransactionStatus.PENDING, response.status());
+        assertEquals(42L, response.transactionId());
+        assertEquals(new BigDecimal("100.00"), sender.getBalance());
+        verify(accountRepository, never()).save(any(Account.class));
     }
 }

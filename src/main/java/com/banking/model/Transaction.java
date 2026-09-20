@@ -40,6 +40,15 @@ public class Transaction {
     @JoinColumn(name = "receiver_account_id")
     private Account receiverAccount;
 
+    @Column(name = "external_bank_code")
+    private String externalBankCode;
+
+    @Column(name = "external_account_number")
+    private String externalAccountNumber;
+
+    @Column(name = "external_recipient_name")
+    private String externalRecipientName;
+
     @PrePersist
     public void onCreate() {
         this.transactionTime = LocalDateTime.now();

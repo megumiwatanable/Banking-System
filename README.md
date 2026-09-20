@@ -236,10 +236,11 @@ sequenceDiagram
     participant S as AccountServiceImpl
     participant DB as MySQL
 
-    U->>C: POST /api/account/{accountId}/transfer {receiveAccountId, amount}
-    C->>S: transfer(accountId, request)
-    S->>S: reject if accountId == receiveAccountId
-    S->>S: firstId = min(accountId, receiveAccountId)<br/>secondId = max(accountId, receiveAccountId)
+    U->>C: POST /api/account/transfer {senderAccountNumber, receiverAccountNumber, amount}
+    C->>S: transfer(request)
+    S->>S: reject if senderAccountNumber == receiverAccountNumber
+    S->>DB: resolve both account numbers to account IDs
+    S->>S: firstId = min(senderId, receiverId)<br/>secondId = max(senderId, receiverId)
 
     Note over S,DB: Locks are always taken low-ID → high-ID,<br/>never sender-first — this is what prevents deadlocks
 
@@ -443,7 +444,8 @@ Every `/api/**` route is rate-limited (default **60 requests/min**, keyed by aut
 | `GET` | `/{accountId}` | 🔒 | 60/min | Fetch an account owned by the caller |
 | `POST` | `/{accountId}/deposit` | 🔒 | 20/min | Credit the account |
 | `POST` | `/{accountId}/withdraw` | 🔒 | 20/min | Debit the account (fails on insufficient funds) |
-| `POST` | `/{accountId}/transfer` | 🔒 | 20/min | Atomically move funds to another account |
+| `POST` | `/transfer` | 🔒 | 20/min | Transfer internally by sender and receiver account numbers |
+| `POST` | `/transfer/interbank` | 🔒 | 20/min | Record a simulated interbank request as `PENDING`; no debit or external settlement |
 
 ### Transactions — base path `/api/transaction`
 

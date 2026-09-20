@@ -1,14 +1,21 @@
 package com.banking.dto.account;
 
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
 
 public record TransferRequest (
-        @NotNull(message = "Reciver account ID is required")
-        Long receiveAccountId,
+        @NotBlank(message = "Sender account number is required")
+        @Pattern(regexp = "\\d{10}", message = "Sender account number must have 10 digits")
+        String senderAccountNumber,
 
-        @Positive(message = "Amount must be greater than 0")
+        @NotBlank(message = "Receiver account number is required")
+        @Pattern(regexp = "\\d{10}", message = "Receiver account number must have 10 digits")
+        String receiverAccountNumber,
+
+        @NotNull @Positive(message = "Amount must be greater than 0")
         BigDecimal amount
 ){}
