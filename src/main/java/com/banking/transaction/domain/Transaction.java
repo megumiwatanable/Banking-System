@@ -1,0 +1,69 @@
+package com.banking.transaction.domain;
+
+import com.banking.account.domain.Account;
+import jakarta.persistence.*;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Entity
+@Table(name = "transactions")
+@Getter
+@Setter
+@NoArgsConstructor
+public class Transaction {
+  @Id
+  @GeneratedValue(strategy = GenerationType.IDENTITY)
+  private Long id;
+
+  @Enumerated(EnumType.STRING)
+  @Column(nullable = false)
+  private TransactionType transactionType;
+
+  @Column(nullable = false, precision = 19, scale = 2)
+  private BigDecimal amount;
+
+  @Column(nullable = false, updatable = false)
+  private LocalDateTime transactionTime;
+
+  @Enumerated(EnumType.STRING)
+  @Column(nullable = false)
+  private TransactionStatus status;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  @JoinColumn(name = "sender_account_id")
+  private Account senderAccount;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  @JoinColumn(name = "receiver_account_id")
+  private Account receiverAccount;
+
+  @Column(name = "external_bank_code")
+  private String externalBankCode;
+
+  @Column(name = "external_account_number")
+  private String externalAccountNumber;
+
+  @Column(name = "external_recipient_name")
+  private String externalRecipientName;
+
+  @PrePersist
+  public void onCreate() {
+    this.transactionTime = LocalDateTime.now();
+  }
+
+  public Transaction(
+      TransactionType transactionType,
+      BigDecimal amount,
+      Account senderAccount,
+      Account receiverAccount) {
+
+    this.transactionType = transactionType;
+    this.amount = amount;
+    this.senderAccount = senderAccount;
+    this.receiverAccount = receiverAccount;
+    this.status = TransactionStatus.PENDING;
+  }
+}

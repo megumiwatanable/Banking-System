@@ -164,7 +164,7 @@ Every /api/** Request
 - **Account** has `@Version` for optimistic locking
 - Enums: `AccountType` (SAVINGS, CURRENT), `TransactionType`, `TransactionStatus`
 - Balance uses `BigDecimal`
-- Flyway migrations (V1__users, V2__accounts, V3__transactions)
+- Flyway migrations (V1 users, V2 accounts, V3 transactions, V4 interbank details, V5 customer financial services)
 
 ## Startup & Configuration Flow
 

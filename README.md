@@ -44,7 +44,7 @@
 
 **Banking System** is a RESTful backend that models the core of a retail banking platform: customer onboarding, multi-account ownership, and money movement (deposits, withdrawals, transfers) backed by an immutable transaction ledger.
 
-It is written as a layered Spring Boot application with a strong emphasis on **correctness under concurrency** (row-level locking, deadlock-avoidance ordering) and **defense-in-depth security** (stateless JWT auth, BCrypt hashing, per-endpoint rate limiting). The schema is version-controlled with Flyway rather than left to Hibernate auto-DDL, and reads are accelerated with a Redis-backed second-level cache.
+It is written as a modular monolith organized around the `user`, `account`, and `transaction` business capabilities, with a strong emphasis on **correctness under concurrency** (row-level locking, deadlock-avoidance ordering) and **defense-in-depth security** (stateless JWT auth, BCrypt hashing, per-endpoint rate limiting). The schema is version-controlled with Flyway rather than left to Hibernate auto-DDL, and reads are accelerated with a Redis-backed cache.
 
 This is not a toy CRUD demo — it implements the two hardest problems in a banking backend correctly: **atomic double-entry money transfers between two independently-locked rows**, and **stateless authentication without leaking authorization state**.
 
@@ -82,7 +82,7 @@ This is not a toy CRUD demo — it implements the two hardest problems in a bank
 
 ## 🏗 Architecture
 
-The application follows a classic layered architecture, with two cross-cutting interceptors (JWT auth and rate limiting) sitting in front of every controller.
+The application is a modular monolith: one deployable Spring Boot process and one database, with code grouped by business capability. Each module contains its own API, application logic, domain model, and persistence adapter. JWT authentication, rate limiting, errors, and framework configuration are shared infrastructure.
 
 ```mermaid
 flowchart TB
@@ -92,15 +92,15 @@ flowchart TB
         JWT["JwtAuthenticationFilter\n(extracts + validates Bearer token,\npopulates SecurityContext)"]
     end
 
-    subgraph MVC["Spring MVC"]
+    subgraph Shared["Shared infrastructure"]
         RL["RateLimitInterceptor\n(Bucket4j bucket per user/IP + endpoint)"]
-        Ctrl["Controllers\nUserController · AccountController · TransactionController"]
+        Security["Security · Errors · Configuration"]
     end
 
-    subgraph Domain["Service Layer"]
-        US["UserServiceImpl"]
-        AS["AccountServiceImpl"]
-        TS["TransactionServiceImpl"]
+    subgraph Modules["Business modules"]
+        User["user\napi · application · domain · infrastructure"]
+        Account["account\napi · application · domain · infrastructure"]
+        Transaction["transaction\napi · application · domain · infrastructure"]
     end
 
     subgraph Data["Persistence"]
@@ -114,10 +114,10 @@ flowchart TB
 
     Client -->|HTTPS request| JWT
     JWT -->|SecurityContext set| RL
-    RL -->|token consumed| Ctrl
-    Ctrl --> US & AS & TS
-    US & AS & TS -->|read/write| Repo
-    US & AS & TS -.->|cache hit/miss| Redis
+    RL -->|token consumed| User & Account & Transaction
+    Security -.-> User & Account & Transaction
+    User & Account & Transaction -->|read/write| Repo
+    User & Account & Transaction -.->|cache hit/miss| Redis
     Repo --> PG
 
     style JWT fill:#2b3a55,color:#fff
@@ -126,9 +126,9 @@ flowchart TB
     style Redis fill:#5c1f1f,color:#fff
 ```
 
-**Layer responsibilities**
+**Module responsibilities**
 
-| Layer | Responsibility |
+| Area | Responsibility |
 |---|---|
 | **Filter** | Authenticates the request statelessly by validating the JWT and populating `SecurityContextHolder`. No filter-level authorization — everything past this point is "authenticated or not." |
 | **Interceptor** | Enforces per-identity, per-endpoint request quotas before the controller method ever runs. |
@@ -137,11 +137,14 @@ flowchart TB
 | **Repository** | Spring Data JPA interfaces; one repository (`AccountRepository`) carries a custom `@Lock(PESSIMISTIC_WRITE)` query. |
 | **Database** | MySQL enforces the invariants the application *should* uphold anyway (uniqueness, non-negative balances, referential integrity) as a last line of defense. |
 
+See [the modular monolith guide](Docs/modular-monolith.md) for package boundaries and dependency direction.
+The [financial services API guide](Docs/financial-services-api.md) describes the CASA, customer, asset, credit-rating, and simulated CITAD modules.
+
 ---
 
 ## 🗄 Database Design
 
-Three tables, Flyway-versioned (`V1`–`V3`), with explicit constraints rather than relying on ORM auto-generation.
+The schema is Flyway-versioned (`V1`–`V5`) with explicit constraints rather than relying on ORM auto-generation. Core ledger tables are supplemented by customer profile, CASA enrollment, asset, credit-rating, and CITAD inquiry tables.
 
 ```mermaid
 erDiagram
@@ -313,37 +316,33 @@ flowchart LR
 Banking-System/
 ├── src/main/java/com/banking/
 │   ├── BankingSystemApplication.java      # @SpringBootApplication, @EnableCaching
-│   ├── annotation/ratelimit/
-│   │   ├── RateLimit.java                 # @RateLimit(capacity, refillTokens, refillPeriodSeconds)
-│   │   ├── RateLimitInterceptor.java      # runs on every /api/** call
-│   │   └── RateLimitService.java          # Caffeine-backed Bucket4j bucket registry
-│   ├── config/
-│   │   ├── SecurityConfig.java            # JWT filter chain, BCrypt bean, stateless sessions
-│   │   ├── RedisCacheConfig.java          # RedisCacheManager, Jackson polymorphic serializer, 10 min TTL
-│   │   ├── WebConfig.java                 # registers the rate-limit interceptor on /api/**
-│   │   └── OpenApiConfig.java             # Swagger/OpenAPI metadata bean
-│   ├── controller/
-│   │   ├── UserController.java
-│   │   ├── AccountController.java
-│   │   └── TransactionController.java
-│   ├── dto/
-│   │   ├── account/    # Create/Deposit/Withdraw/Transfer requests + AccountResponse
-│   │   ├── auth/       # Login/Register requests + responses, ErrorResponse
-│   │   ├── transaction/# TransactionResponse
-│   │   └── user/       # Profile & password DTOs
-│   ├── exception/      # GlobalExceptionHandler + 10 custom exceptions
-│   ├── model/           # User, Account, Transaction + AccountType, TransactionType, TransactionStatus
-│   ├── repository/      # JPA repositories (AccountRepository holds the pessimistic-lock query)
-│   ├── security/        # JwtAuthenticationFilter, JwtService, SecurityUtils
-│   └── service/          # Interfaces + impl/ (all business logic + @Transactional boundaries)
+│   ├── user/                            # identity, authentication, profile
+│   │   ├── api/                         # controller + request/response DTOs
+│   │   ├── application/                 # use cases and transaction boundaries
+│   │   ├── domain/                      # User entity
+│   │   └── infrastructure/              # UserRepository
+│   ├── account/                         # accounts and money movement
+│   │   ├── api/                         # controller + request/response DTOs
+│   │   ├── application/                 # account use cases and locking
+│   │   ├── domain/                      # Account and AccountType
+│   │   └── infrastructure/              # AccountRepository
+│   ├── transaction/                     # transaction history and ledger model
+│   │   ├── api/
+│   │   ├── application/
+│   │   ├── domain/
+│   │   └── infrastructure/
+│   └── shared/                          # config, security, errors, rate limiting
 ├── src/main/resources/
 │   ├── application.properties             # shared config (JWT expiry, cache, actuator, Redis host)
 │   ├── application-dev.properties         # dev DB creds, ddl-auto=validate, DEBUG logging
 │   └── db/migration/
 │       ├── V1__create_users_table.sql
 │       ├── V2__create_accounts_table.sql
-│       └── V3__create_transactions_table.sql
-├── src/test/java/com/banking/             # 61 tests: controllers, services, security
+│       ├── V3__create_transactions_table.sql
+│       ├── V4__interbank_transfer_details.sql
+│       └── V5__customer_financial_services.sql
+├── src/test/java/com/banking/             # tests mirror the business modules
+├── Docs/modular-monolith.md               # module boundaries and dependency direction
 ├── docker-compose.yml                     # MySQL 8.4 + Redis 7
 ├── pom.xml
 ├── mvnw / mvnw.cmd
@@ -533,7 +532,7 @@ Run everything:
 5. **Consistent, well-typed error handling.** One `@RestControllerAdvice`, one JSON error shape, precise HTTP status codes (`404`, `409`, `423`, `429`, etc.) instead of blanket `500`s.
 6. **Real rate limiting**, not a decorative annotation — token-bucket semantics via Bucket4j, per-identity keying, and a correct `Retry-After` header.
 7. **DTOs as Java records** — immutable, boilerplate-free request/response contracts that can't accidentally leak entity internals (like the password hash) over the wire.
-8. **A genuinely substantial test suite** (61 tests) covering services, controllers, and the security filter chain — not just happy-path smoke tests.
+8. **A substantial test suite** covering application services, HTTP adapters, security, and the Spring context.
 9. **Self-documenting API** via springdoc/Swagger, generated from the actual controller code rather than hand-maintained separately.
 
 ---
@@ -542,7 +541,7 @@ Run everything:
 
 A close read of the current codebase surfaces some real issues worth knowing about before treating this as production-ready:
 
-- **🔴 Cache/authorization interaction on a few read endpoints.** `getAccountById`, `getTransactionById`, and `getTransactionForAcc` are annotated `@Cacheable` with keys derived *only* from the requested ID (`accountId`, `transactionId`), not from the caller's identity. The ownership check happens **inside** the method body — but `@Cacheable` short-circuits the method entirely on a cache hit. In practice: once User A legitimately fetches account #42, the response is cached under key `42`. If User B (who does *not* own account #42) requests the same ID within the 10-minute TTL, Spring Security's owner check never re-runs, and User B receives User A's cached data. This is worth fixing by including the caller's identity in the cache key (e.g. `#accountId + ':' + T(com.banking.security.SecurityUtils).getCurrentUserEmail()`).
+- **Cache invalidation is still basic.** Read cache keys include the authenticated email so cached account and transaction data cannot cross user boundaries. Money mutations should add targeted cache eviction before relying on cached responses in a production deployment.
 - **No role-based access control.** The JWT filter grants an authenticated principal but **zero** `GrantedAuthority` values — every authenticated user is functionally equivalent at the Spring Security layer. All fine-grained authorization (account ownership, transaction access) is hand-rolled inside service methods rather than declared via `@PreAuthorize` or method security. There is no admin role, no staff role, no scoped API tokens.
 - **No token revocation / logout.** JWTs are stateless with a 24-hour expiry and no server-side blacklist or refresh-token rotation. A leaked token remains valid until it naturally expires; there is no way to force-invalidate one.
 - **Unbounded list endpoints.** `GET /api/transaction`, `GET /api/transaction/account/{accountId}` return the full result set with no pagination, sorting parameters, or date-range filtering. A long-lived, high-activity account will eventually return an arbitrarily large JSON payload.
