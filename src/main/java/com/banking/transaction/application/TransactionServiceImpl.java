@@ -35,7 +35,6 @@ public class TransactionServiceImpl implements TransactionService {
       value = "allTransactionsV2",
       key = "T(com.banking.shared.security.SecurityUtils).getCurrentUserEmail()")
   public List<TransactionResponse> getAllTransactions() {
-
     String email = SecurityUtils.getCurrentUserEmail();
 
     return transactionRepository
@@ -61,16 +60,7 @@ public class TransactionServiceImpl implements TransactionService {
                         "Transaction not found with id: " + transactionId));
 
     User currentUser = getCurrentUserEntity();
-    boolean isSender =
-        transaction.getSenderAccount() != null
-            && transaction.getSenderAccount().getUser().getId().equals(currentUser.getId());
-    boolean isReceiver =
-        transaction.getReceiverAccount() != null
-            && transaction.getReceiverAccount().getUser().getId().equals(currentUser.getId());
-
-    if (!isSender && !isReceiver) {
-      throw new UnauthorizedAccessException("You do not have access to this transaction");
-    }
+    ensureTransactionOwnership(transaction, currentUser);
 
     return toTransactionResponse(transaction);
   }
@@ -110,13 +100,33 @@ public class TransactionServiceImpl implements TransactionService {
         transaction.getId(),
         transaction.getTransactionType(),
         transaction.getAmount(),
-        transaction.getSenderAccount() != null
-            ? transaction.getSenderAccount().getAccountNumber()
-            : null,
-        transaction.getReceiverAccount() != null
-            ? transaction.getReceiverAccount().getAccountNumber()
-            : transaction.getExternalAccountNumber(),
+        accountNumberOf(transaction.getSenderAccount()),
+        receiverAccountNumberOf(transaction),
         transaction.getTransactionTime(),
         transaction.getStatus());
+  }
+
+  private void ensureTransactionOwnership(Transaction transaction, User user) {
+    boolean isSender = belongsTo(transaction.getSenderAccount(), user);
+    boolean isReceiver = belongsTo(transaction.getReceiverAccount(), user);
+
+    if (!isSender && !isReceiver) {
+      throw new UnauthorizedAccessException("You do not have access to this transaction");
+    }
+  }
+
+  private boolean belongsTo(Account account, User user) {
+    return account != null && account.getUser().getId().equals(user.getId());
+  }
+
+  private String receiverAccountNumberOf(Transaction transaction) {
+    String internalAccountNumber = accountNumberOf(transaction.getReceiverAccount());
+    return internalAccountNumber != null
+        ? internalAccountNumber
+        : transaction.getExternalAccountNumber();
+  }
+
+  private String accountNumberOf(Account account) {
+    return account == null ? null : account.getAccountNumber();
   }
 }

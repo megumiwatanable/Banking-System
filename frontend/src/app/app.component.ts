@@ -1,147 +1,596 @@
-import { CommonModule } from '@angular/common';
-import { Component, OnInit, inject } from '@angular/core';
-import { FormsModule } from '@angular/forms';
-import { HttpErrorResponse } from '@angular/common/http';
-import { forkJoin, Observable } from 'rxjs';
-import { Account, ApiError, ApiService, Asset, CasaEnrollment, CitadInquiry, CreditRating, CustomerProfile, InterbankTransferResponse, Transaction, User } from './api.service';
+import { CommonModule } from "@angular/common";
+import { HttpErrorResponse } from "@angular/common/http";
+import { Component, OnInit, inject } from "@angular/core";
+import { FormsModule } from "@angular/forms";
+import { forkJoin, Observable } from "rxjs";
+import {
+  Account,
+  ApiError,
+  Asset,
+  CasaEnrollment,
+  CasaPackage,
+  CitadInquiry,
+  CreateAssetRequest,
+  CreditRating,
+  CustomerProfile,
+  InterbankTransferResponse,
+  Transaction,
+  TransferResult,
+  TransferMode,
+  User,
+} from "./api.models";
+import { ApiService } from "./api.service";
+import { AUTH_TOKEN_KEY } from "./auth.interceptor";
+import { BankingOperationsComponent } from "./features/banking-operations/banking-operations.component";
 
-type Page = 'overview' | 'accounts' | 'transactions' | 'services' | 'profile';
-type Action = 'deposit' | 'withdraw' | 'transfer';
+type Page =
+  | "overview"
+  | "accounts"
+  | "transactions"
+  | "operations"
+  | "services"
+  | "profile";
+type AccountAction = "deposit" | "withdraw" | "transfer";
+type AuthMode = "login" | "register";
 
-@Component({ selector: 'app-root', standalone: true, imports: [CommonModule, FormsModule], templateUrl: './app.component.html' })
+const EMPTY_ASSET_FORM: CreateAssetRequest = {
+  assetType: "CASH",
+  assetName: "",
+  estimatedValue: 0,
+  currency: "VND",
+  description: "",
+};
+
+@Component({
+  selector: "app-root",
+  standalone: true,
+  imports: [CommonModule, FormsModule, BankingOperationsComponent],
+  templateUrl: "./app.component.html",
+})
 export class AppComponent implements OnInit {
-  private api = inject(ApiService);
-  page: Page = 'overview';
-  authMode: 'login' | 'register' = 'login';
-  auth = { fullName: '', email: '', password: '' };
+  private readonly api = inject(ApiService);
+
+  page: Page = "overview";
+  authMode: AuthMode = "login";
+  auth = { fullName: "", email: "", password: "" };
+
   user: User | null = null;
   accounts: Account[] = [];
   transactions: Transaction[] = [];
   selectedAccountId: number | null = null;
-  action: Action | null = null;
-  transferMode: 'internal' | 'interbank' = 'internal';
+
+  action: AccountAction | null = null;
+  transferMode: TransferMode = "internal";
   amount: number | null = null;
-  receiveAccountNumber = '';
-  bankCode = '';
-  recipientName = '';
-  newAccountType: Account['accountType'] = 'CURRENT';
-  profileForm = { fullName: '', email: '', currentPass: '', newPass: '' };
+  receiveAccountNumber = "";
+  bankCode = "";
+  recipientName = "";
+  newAccountType: Account["accountType"] = "CURRENT";
+
+  profileForm = { fullName: "", email: "", currentPass: "", newPass: "" };
   customerProfile: CustomerProfile | null = null;
-  customerForm = { phoneNumber: '', address: '', dateOfBirth: '' };
+  customerForm = { phoneNumber: "", address: "", dateOfBirth: "" };
   casa: CasaEnrollment | null = null;
-  casaPackage: 'BASIC' | 'PREMIUM' = 'BASIC';
+  casaPackage: CasaPackage = "BASIC";
   creditRating: CreditRating | null = null;
   assets: Asset[] = [];
-  assetForm = { assetType: 'CASH', assetName: '', estimatedValue: 0, currency: 'VND', description: '' };
+  assetForm: CreateAssetRequest = { ...EMPTY_ASSET_FORM };
   citadInquiries: CitadInquiry[] = [];
-  citadForm = { transactionId: 0, reason: '' };
+  citadForm = { transactionId: 0, reason: "" };
+
   busy = false;
-  today = new Date();
+  readonly today = new Date();
   loading = false;
-  error = '';
-  notice = '';
+  error = "";
+  notice = "";
 
-  ngOnInit() { if (sessionStorage.getItem('banking_token')) this.load(); }
+  ngOnInit(): void {
+    if (sessionStorage.getItem(AUTH_TOKEN_KEY)) {
+      this.loadDashboard();
+    }
+  }
 
-  get selectedAccount() { return this.accounts.find(a => a.id === this.selectedAccountId) ?? this.accounts[0]; }
-  get currentAccounts() { return this.accounts.filter(a => a.accountType === 'CURRENT'); }
-  get totalBalance() { return this.accounts.reduce((sum, account) => sum + Number(account.balance), 0); }
-  get displayedTransactions() {
+  get selectedAccount(): Account | undefined {
+    return (
+      this.accounts.find((account) => account.id === this.selectedAccountId) ??
+      this.accounts[0]
+    );
+  }
+
+  get currentAccounts(): Account[] {
+    return this.accounts.filter((account) => account.accountType === "CURRENT");
+  }
+
+  get totalBalance(): number {
+    return this.accounts.reduce(
+      (sum, account) => sum + Number(account.balance),
+      0,
+    );
+  }
+
+  get displayedTransactions(): Transaction[] {
     const number = this.selectedAccount?.accountNumber;
-    return this.page === 'transactions' && number
-      ? this.transactions.filter(t => t.senderAccountNumber === number || t.receiverAccountNumber === number)
+    return this.page === "transactions" && number
+      ? this.transactions.filter(
+          (transaction) =>
+            transaction.senderAccountNumber === number ||
+            transaction.receiverAccountNumber === number,
+        )
       : this.transactions;
   }
-  get income() { return this.transactions.filter(t => t.status === 'SUCCESS' && this.isIncoming(t)).reduce((sum, t) => sum + Number(t.amount), 0); }
-  get outgoing() { return this.transactions.filter(t => t.status === 'SUCCESS' && !this.isIncoming(t)).reduce((sum, t) => sum + Number(t.amount), 0); }
 
-  isIncoming(t: Transaction) { return t.transactionType === 'DEPOSIT' || (t.transactionType === 'TRANSFER' && this.accounts.some(a => a.accountNumber === t.receiverAccountNumber) && !this.accounts.some(a => a.accountNumber === t.senderAccountNumber)); }
-  transactionLabel(t: Transaction) { return t.transactionType === 'DEPOSIT' ? 'Nạp tiền' : t.transactionType === 'WITHDRAW' ? 'Rút tiền' : t.transactionType === 'INTERBANK_TRANSFER' ? 'Yêu cầu liên ngân hàng' : this.isIncoming(t) ? 'Nhận chuyển khoản' : 'Chuyển tiền'; }
-  initials(name: string) { return name.split(' ').slice(-2).map(part => part[0]?.toUpperCase()).join(''); }
-
-  authenticate() {
-    this.clearMessages();
-    if (!this.auth.email || !this.auth.password || (this.authMode === 'register' && !this.auth.fullName)) { this.error = 'Vui lòng điền đầy đủ thông tin.'; return; }
-    this.busy = true;
-    if (this.authMode === 'register') {
-      this.api.register(this.auth.fullName, this.auth.email, this.auth.password).subscribe({
-        next: () => { this.busy = false; this.authMode = 'login'; this.auth.password = ''; this.notice = 'Tạo tài khoản thành công. Hãy đăng nhập.'; },
-        error: e => this.fail(e)
-      });
-      return;
-    }
-    this.api.login(this.auth.email, this.auth.password).subscribe({
-      next: result => { sessionStorage.setItem('banking_token', result.token); this.auth.password = ''; this.busy = false; this.load(); },
-      error: e => this.fail(e)
-    });
+  get income(): number {
+    return this.sumSuccessfulTransactions((transaction) =>
+      this.isIncoming(transaction),
+    );
   }
 
-  load() {
+  get outgoing(): number {
+    return this.sumSuccessfulTransactions(
+      (transaction) => !this.isIncoming(transaction),
+    );
+  }
+
+  isIncoming(transaction: Transaction): boolean {
+    if (transaction.transactionType === "DEPOSIT") {
+      return true;
+    }
+
+    if (
+      transaction.transactionType !== "TRANSFER" &&
+      transaction.transactionType !== "INTERNAL_TRANSFER"
+    ) {
+      return false;
+    }
+
+    const ownsReceiver = this.ownsAccount(transaction.receiverAccountNumber);
+    const ownsSender = this.ownsAccount(transaction.senderAccountNumber);
+    return ownsReceiver && !ownsSender;
+  }
+
+  transactionLabel(transaction: Transaction): string {
+    const labels: Partial<Record<Transaction["transactionType"], string>> = {
+      DEPOSIT: "Nạp tiền",
+      WITHDRAW: "Rút tiền",
+      INTERNAL_TRANSFER: "Chuyển tiền nội bộ",
+      INTERBANK_TRANSFER: "Yêu cầu liên ngân hàng",
+      FEE: "Phí giao dịch",
+      REVERSAL: "Hoàn giao dịch",
+    };
+
+    return (
+      labels[transaction.transactionType] ??
+      (this.isIncoming(transaction) ? "Nhận chuyển khoản" : "Chuyển tiền")
+    );
+  }
+
+  initials(name: string): string {
+    return name
+      .trim()
+      .split(/\s+/)
+      .slice(-2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("");
+  }
+
+  authenticate(): void {
+    this.clearMessages();
+
+    if (!this.hasRequiredAuthFields()) {
+      this.error = "Vui lòng điền đầy đủ thông tin.";
+      return;
+    }
+
+    this.busy = true;
+
+    if (this.authMode === "register") {
+      this.register();
+      return;
+    }
+
+    this.login();
+  }
+
+  loadDashboard(): void {
     this.loading = true;
-    forkJoin({ user: this.api.profile(), accounts: this.api.accounts(), transactions: this.api.transactions() }).subscribe({
-      next: data => {
+
+    forkJoin({
+      user: this.api.profile(),
+      accounts: this.api.accounts(),
+      transactions: this.api.transactions(),
+    }).subscribe({
+      next: (data) => {
         this.user = data.user;
         this.accounts = data.accounts;
-        this.transactions = data.transactions.sort((a, b) => b.transactionTime.localeCompare(a.transactionTime));
-        if (!this.accounts.some(a => a.id === this.selectedAccountId)) this.selectedAccountId = this.accounts[0]?.id ?? null;
+        this.transactions = [...data.transactions].sort((first, second) =>
+          second.transactionTime.localeCompare(first.transactionTime),
+        );
+
+        if (
+          !this.accounts.some(
+            (account) => account.id === this.selectedAccountId,
+          )
+        ) {
+          this.selectedAccountId = this.accounts[0]?.id ?? null;
+        }
+
         this.profileForm.fullName = data.user.fullName;
         this.profileForm.email = data.user.email;
         this.loading = false;
       },
-      error: e => { this.loading = false; if (e.status === 401 || e.status === 403) this.logout(); else this.fail(e); }
+      error: (error: HttpErrorResponse) => {
+        this.loading = false;
+        if (error.status === 401 || error.status === 403) {
+          this.logout();
+          return;
+        }
+        this.fail(error);
+      },
     });
   }
 
-  createAccount() {
-    this.clearMessages(); this.busy = true;
-    this.api.createAccount(this.newAccountType).subscribe({ next: account => { this.busy = false; this.selectedAccountId = account.id; this.notice = 'Đã tạo tài khoản mới.'; this.load(); }, error: e => this.fail(e) });
+  createAccount(): void {
+    this.startRequest();
+    this.api.createAccount(this.newAccountType).subscribe({
+      next: (account) => {
+        this.busy = false;
+        this.selectedAccountId = account.id;
+        this.notice = "Đã tạo tài khoản mới.";
+        this.loadDashboard();
+      },
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
   }
 
-  submitAction() {
-    if (!this.action || !this.selectedAccountId) return;
+  submitAction(): void {
+    if (!this.action || !this.selectedAccountId || !this.selectedAccount) {
+      return;
+    }
+
     this.clearMessages();
-    if (!this.amount || this.amount <= 0 || !Number.isFinite(this.amount)) { this.error = 'Số tiền phải lớn hơn 0.'; return; }
-    if (this.action === 'transfer' && !this.receiveAccountNumber.trim()) { this.error = 'Nhập số tài khoản nhận.'; return; }
-    if (this.action === 'transfer' && this.transferMode === 'internal' && this.receiveAccountNumber.trim() === this.selectedAccount?.accountNumber) { this.error = 'Tài khoản nhận phải khác tài khoản gửi.'; return; }
-    if (this.action === 'transfer' && this.transferMode === 'interbank' && (!this.bankCode.trim() || !this.recipientName.trim())) { this.error = 'Nhập ngân hàng và tên người nhận.'; return; }
+    const validationError = this.validateAccountAction();
+    if (validationError) {
+      this.error = validationError;
+      return;
+    }
+
     this.busy = true;
-    const label = this.action === 'deposit' ? 'Nạp tiền' : this.action === 'withdraw' ? 'Rút tiền' : 'Chuyển tiền';
-    const request: Observable<Account | InterbankTransferResponse> = this.action === 'transfer'
-      ? this.transferMode === 'internal'
-        ? this.api.transfer(this.selectedAccount!.accountNumber, this.receiveAccountNumber.trim(), this.amount)
-        : this.api.interbankTransfer(this.selectedAccount!.accountNumber, this.bankCode.trim(), this.receiveAccountNumber.trim(), this.recipientName.trim(), this.amount)
-      : this.api.money(this.selectedAccountId, this.action, this.amount);
+    const completedAction = this.action;
+    const request = this.createAccountActionRequest();
+
     request.subscribe({
-      next: () => { this.busy = false; this.action = null; this.amount = null; this.receiveAccountNumber = ''; this.notice = this.transferMode === 'interbank' && label === 'Chuyển tiền' ? 'Đã ghi nhận yêu cầu mô phỏng. Chưa trừ tiền và chưa gửi đến ngân hàng nhận.' : `${label} thành công.`; this.load(); },
-      error: (e: HttpErrorResponse) => this.fail(e)
+      next: () => {
+        this.busy = false;
+        this.notice = this.successMessage(completedAction);
+        this.resetActionForm();
+        this.loadDashboard();
+      },
+      error: (error: HttpErrorResponse) => this.fail(error),
     });
   }
 
-  saveProfile() {
-    this.clearMessages(); this.busy = true;
+  saveProfile(): void {
+    this.startRequest();
     const emailChanged = this.profileForm.email !== this.user?.email;
-    this.api.updateProfile(this.profileForm.fullName, this.profileForm.email).subscribe({ next: user => { this.busy = false; if (emailChanged) { this.logout(); this.notice = 'Email đã đổi. Vui lòng đăng nhập lại bằng email mới.'; } else { this.user = user; this.notice = 'Đã cập nhật hồ sơ.'; } }, error: e => this.fail(e) });
+
+    this.api
+      .updateProfile(this.profileForm.fullName, this.profileForm.email)
+      .subscribe({
+        next: (user) => {
+          this.busy = false;
+          if (emailChanged) {
+            this.logout();
+            this.notice =
+              "Email đã đổi. Vui lòng đăng nhập lại bằng email mới.";
+            return;
+          }
+
+          this.user = user;
+          this.notice = "Đã cập nhật hồ sơ.";
+        },
+        error: (error: HttpErrorResponse) => this.fail(error),
+      });
   }
-  savePassword() {
-    this.clearMessages(); this.busy = true;
-    this.api.changePassword(this.profileForm.currentPass, this.profileForm.newPass).subscribe({ next: () => { this.busy = false; this.profileForm.currentPass = ''; this.profileForm.newPass = ''; this.notice = 'Đã đổi mật khẩu.'; }, error: e => this.fail(e) });
+
+  savePassword(): void {
+    this.startRequest();
+    this.api
+      .changePassword(this.profileForm.currentPass, this.profileForm.newPass)
+      .subscribe({
+        next: () => {
+          this.busy = false;
+          this.profileForm.currentPass = "";
+          this.profileForm.newPass = "";
+          this.notice = "Đã đổi mật khẩu.";
+        },
+        error: (error: HttpErrorResponse) => this.fail(error),
+      });
   }
-  loadServices() {
-    this.api.customerProfile().subscribe(p => { this.customerProfile = p; this.customerForm = { phoneNumber: p.phoneNumber || '', address: p.address || '', dateOfBirth: p.dateOfBirth || '' }; });
-    this.api.assets().subscribe(items => this.assets = items);
-    this.api.citadInquiries().subscribe(items => this.citadInquiries = items);
-    this.api.casa().subscribe({ next: value => this.casa = value, error: e => { if (e.status !== 404) this.fail(e); } });
-    this.api.creditRating().subscribe({ next: value => this.creditRating = value, error: e => { if (e.status !== 404) this.fail(e); } });
+
+  loadServices(): void {
+    this.api.customerProfile().subscribe({
+      next: (profile) => {
+        this.customerProfile = profile;
+        this.customerForm = {
+          phoneNumber: profile.phoneNumber || "",
+          address: profile.address || "",
+          dateOfBirth: profile.dateOfBirth || "",
+        };
+      },
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
+    this.api.assets().subscribe({
+      next: (assets) => (this.assets = assets),
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
+    this.api.citadInquiries().subscribe({
+      next: (inquiries) => (this.citadInquiries = inquiries),
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
+    this.loadOptionalServices();
   }
-  saveCustomerProfile() { this.api.updateCustomerProfile(this.customerForm.phoneNumber, this.customerForm.address, this.customerForm.dateOfBirth).subscribe({ next: p => { this.customerProfile=p; this.notice='Đã cập nhật hồ sơ khách hàng.'; }, error:e=>this.fail(e) }); }
-  enrollCasa() { if (!this.selectedAccount) return; this.api.enrollCasa(this.selectedAccount.accountNumber,this.casaPackage).subscribe({next:v=>{this.casa=v;this.notice='Đăng ký CASA thành công.';},error:e=>this.fail(e)}); }
-  evaluateCredit() { this.api.evaluateCredit().subscribe({next:v=>{this.creditRating=v;this.notice='Đã cập nhật xếp hạng nội bộ.';},error:e=>this.fail(e)}); }
-  createAsset() { this.api.createAsset(this.assetForm).subscribe({next:v=>{this.assets=[v,...this.assets];this.assetForm={assetType:'CASH',assetName:'',estimatedValue:0,currency:'VND',description:''};this.notice='Đã thêm tài sản.';},error:e=>this.fail(e)}); }
-  deleteAsset(id:number) { this.api.deleteAsset(id).subscribe({next:()=>this.assets=this.assets.filter(a=>a.id!==id),error:e=>this.fail(e)}); }
-  createCitadInquiry() { this.api.createCitadInquiry(this.citadForm.transactionId,this.citadForm.reason).subscribe({next:v=>{this.citadInquiries=[v,...this.citadInquiries];this.citadForm={transactionId:0,reason:''};this.notice='Đã tiếp nhận tra soát mô phỏng.';},error:e=>this.fail(e)}); }
-  show(page: Page) { this.page = page; this.clearMessages(); if (page === 'services') { this.selectedAccountId = this.currentAccounts[0]?.id ?? this.selectedAccountId; this.loadServices(); } }
-  openAction(action: Action) { this.action = action; this.transferMode = 'internal'; this.amount = null; this.receiveAccountNumber = ''; this.bankCode = ''; this.recipientName = ''; this.clearMessages(); }
-  logout() { sessionStorage.removeItem('banking_token'); this.user = null; this.accounts = []; this.transactions = []; this.page = 'overview'; this.action = null; }
-  private clearMessages() { this.error = ''; this.notice = ''; }
-  private fail(error: HttpErrorResponse) { this.busy = false; this.error = (error.error as ApiError)?.validationErrors?.join(' · ') || (error.error as ApiError)?.message || 'Không thể kết nối máy chủ. Vui lòng thử lại.'; }
+
+  saveCustomerProfile(): void {
+    const { phoneNumber, address, dateOfBirth } = this.customerForm;
+    this.api
+      .updateCustomerProfile(phoneNumber, address, dateOfBirth)
+      .subscribe({
+        next: (profile) => {
+          this.customerProfile = profile;
+          this.notice = "Đã cập nhật hồ sơ khách hàng.";
+        },
+        error: (error: HttpErrorResponse) => this.fail(error),
+      });
+  }
+
+  enrollCasa(): void {
+    if (!this.selectedAccount) {
+      return;
+    }
+
+    this.api
+      .enrollCasa(this.selectedAccount.accountNumber, this.casaPackage)
+      .subscribe({
+        next: (enrollment) => {
+          this.casa = enrollment;
+          this.notice = "Đăng ký CASA thành công.";
+        },
+        error: (error: HttpErrorResponse) => this.fail(error),
+      });
+  }
+
+  evaluateCredit(): void {
+    this.api.evaluateCredit().subscribe({
+      next: (rating) => {
+        this.creditRating = rating;
+        this.notice = "Đã cập nhật xếp hạng nội bộ.";
+      },
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
+  }
+
+  createAsset(): void {
+    this.api.createAsset(this.assetForm).subscribe({
+      next: (asset) => {
+        this.assets = [asset, ...this.assets];
+        this.assetForm = { ...EMPTY_ASSET_FORM };
+        this.notice = "Đã thêm tài sản.";
+      },
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
+  }
+
+  deleteAsset(id: number): void {
+    this.api.deleteAsset(id).subscribe({
+      next: () => {
+        this.assets = this.assets.filter((asset) => asset.id !== id);
+      },
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
+  }
+
+  createCitadInquiry(): void {
+    this.api
+      .createCitadInquiry(this.citadForm.transactionId, this.citadForm.reason)
+      .subscribe({
+        next: (inquiry) => {
+          this.citadInquiries = [inquiry, ...this.citadInquiries];
+          this.citadForm = { transactionId: 0, reason: "" };
+          this.notice = "Đã tiếp nhận tra soát mô phỏng.";
+        },
+        error: (error: HttpErrorResponse) => this.fail(error),
+      });
+  }
+
+  show(page: Page): void {
+    this.page = page;
+    this.clearMessages();
+
+    if (page === "services") {
+      this.selectedAccountId =
+        this.currentAccounts[0]?.id ?? this.selectedAccountId;
+      this.loadServices();
+    }
+  }
+
+  openAction(action: AccountAction): void {
+    this.resetActionForm();
+    this.action = action;
+    this.clearMessages();
+  }
+
+  logout(): void {
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    this.user = null;
+    this.accounts = [];
+    this.transactions = [];
+    this.page = "overview";
+    this.action = null;
+  }
+
+  private register(): void {
+    this.api
+      .register(this.auth.fullName, this.auth.email, this.auth.password)
+      .subscribe({
+        next: () => {
+          this.busy = false;
+          this.authMode = "login";
+          this.auth.password = "";
+          this.notice = "Tạo tài khoản thành công. Hãy đăng nhập.";
+        },
+        error: (error: HttpErrorResponse) => this.fail(error),
+      });
+  }
+
+  private login(): void {
+    this.api.login(this.auth.email, this.auth.password).subscribe({
+      next: (result) => {
+        sessionStorage.setItem(AUTH_TOKEN_KEY, result.token);
+        this.auth.password = "";
+        this.busy = false;
+        this.loadDashboard();
+      },
+      error: (error: HttpErrorResponse) => this.fail(error),
+    });
+  }
+
+  private hasRequiredAuthFields(): boolean {
+    return Boolean(
+      this.auth.email &&
+        this.auth.password &&
+        (this.authMode === "login" || this.auth.fullName),
+    );
+  }
+
+  private validateAccountAction(): string | null {
+    if (!this.amount || this.amount <= 0 || !Number.isFinite(this.amount)) {
+      return "Số tiền phải lớn hơn 0.";
+    }
+
+    if (this.action !== "transfer") {
+      return null;
+    }
+
+    const receiver = this.receiveAccountNumber.trim();
+    if (!receiver) {
+      return "Nhập số tài khoản nhận.";
+    }
+    if (
+      this.transferMode === "internal" &&
+      receiver === this.selectedAccount?.accountNumber
+    ) {
+      return "Tài khoản nhận phải khác tài khoản gửi.";
+    }
+    if (
+      this.transferMode === "interbank" &&
+      (!this.bankCode.trim() || !this.recipientName.trim())
+    ) {
+      return "Nhập ngân hàng và tên người nhận.";
+    }
+
+    return null;
+  }
+
+  private createAccountActionRequest(): Observable<
+    Account | InterbankTransferResponse | TransferResult
+  > {
+    const account = this.selectedAccount!;
+    const amount = this.amount!;
+
+    if (this.action !== "transfer") {
+      return this.api.money(account.id, this.action!, amount);
+    }
+
+    if (this.transferMode === "internal") {
+      return this.api.transfer(
+        account.accountNumber,
+        this.receiveAccountNumber.trim(),
+        amount,
+      );
+    }
+
+    return this.api.interbankTransfer(
+      account.accountNumber,
+      this.bankCode.trim(),
+      this.receiveAccountNumber.trim(),
+      this.recipientName.trim(),
+      amount,
+    );
+  }
+
+  private successMessage(action: AccountAction): string {
+    if (action === "transfer" && this.transferMode === "interbank") {
+      return "Đã ghi nhận yêu cầu mô phỏng. Chưa trừ tiền và chưa gửi đến ngân hàng nhận.";
+    }
+
+    const labels: Record<AccountAction, string> = {
+      deposit: "Nạp tiền",
+      withdraw: "Rút tiền",
+      transfer: "Chuyển tiền",
+    };
+    return `${labels[action]} thành công.`;
+  }
+
+  private loadOptionalServices(): void {
+    // A missing CASA enrollment or rating is a valid first-use state, not a UI error.
+    this.api.casa().subscribe({
+      next: (value) => (this.casa = value),
+      error: (error: HttpErrorResponse) => this.failUnlessNotFound(error),
+    });
+    this.api.creditRating().subscribe({
+      next: (value) => (this.creditRating = value),
+      error: (error: HttpErrorResponse) => this.failUnlessNotFound(error),
+    });
+  }
+
+  private resetActionForm(): void {
+    this.action = null;
+    this.transferMode = "internal";
+    this.amount = null;
+    this.receiveAccountNumber = "";
+    this.bankCode = "";
+    this.recipientName = "";
+  }
+
+  private sumSuccessfulTransactions(
+    predicate: (transaction: Transaction) => boolean,
+  ): number {
+    return this.transactions
+      .filter(
+        (transaction) =>
+          transaction.status === "SUCCESS" && predicate(transaction),
+      )
+      .reduce((sum, transaction) => sum + Number(transaction.amount), 0);
+  }
+
+  private ownsAccount(accountNumber: string | null): boolean {
+    return this.accounts.some(
+      (account) => account.accountNumber === accountNumber,
+    );
+  }
+
+  private startRequest(): void {
+    this.clearMessages();
+    this.busy = true;
+  }
+
+  private clearMessages(): void {
+    this.error = "";
+    this.notice = "";
+  }
+
+  private failUnlessNotFound(error: HttpErrorResponse): void {
+    if (error.status !== 404) {
+      this.fail(error);
+    }
+  }
+
+  private fail(error: HttpErrorResponse): void {
+    this.busy = false;
+    const apiError = error.error as ApiError | undefined;
+    this.error =
+      apiError?.validationErrors?.join(" · ") ||
+      apiError?.message ||
+      "Không thể kết nối máy chủ. Vui lòng thử lại.";
+  }
 }

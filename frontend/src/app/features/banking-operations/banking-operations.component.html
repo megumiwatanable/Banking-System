@@ -1,0 +1,113 @@
+<div class="page-heading">
+  <div>
+    <span class="eyebrow purple">NGHIỆP VỤ NGÂN HÀNG</span>
+    <h1>Chuyển tiền và số dư</h1>
+    <p class="muted">Chuyển tiền idempotent, người thụ hưởng và hold balance.</p>
+  </div>
+</div>
+
+<div class="alert error" *ngIf="error">{{ error }}</div>
+<div class="alert success" *ngIf="notice">{{ notice }}</div>
+
+<div class="services-grid">
+  <section class="form-card">
+    <h3>Chuyển tiền nội bộ</h3>
+    <form (ngSubmit)="submitTransfer()">
+      <label
+        >Tài khoản nguồn
+        <select name="transferSource" [(ngModel)]="transferForm.accountId" required>
+          <option *ngFor="let account of accounts" [ngValue]="account.id">
+            {{ account.accountNumber }} · {{ account.availableBalance | number: "1.0-0" }}
+            {{ account.currency }}
+          </option>
+        </select>
+      </label>
+      <label *ngIf="beneficiaries.length"
+        >Chọn người thụ hưởng
+        <select
+          name="transferBeneficiary"
+          [(ngModel)]="selectedBeneficiaryId"
+          (ngModelChange)="selectBeneficiary()"
+        >
+          <option [ngValue]="0">Nhập tài khoản khác</option>
+          <option *ngFor="let beneficiary of beneficiaries" [ngValue]="beneficiary.id">
+            {{ beneficiary.nickname || beneficiary.accountName }} ·
+            {{ beneficiary.accountNumber }}
+          </option>
+        </select>
+      </label>
+      <label
+        >Tài khoản nhận
+        <input name="transferDestination" [(ngModel)]="transferForm.toAccount" pattern="\d{10}" required />
+      </label>
+      <label
+        >Số tiền
+        <input type="number" name="transferAmount" [(ngModel)]="transferForm.amount" min="0.01" required />
+      </label>
+      <label
+        >Nội dung
+        <input name="transferDescription" [(ngModel)]="transferForm.description" maxlength="255" />
+      </label>
+      <button class="btn primary" [disabled]="busy">Chuyển tiền</button>
+    </form>
+    <div *ngIf="reversibleTransfers.length">
+      <hr />
+      <h3>Giao dịch có thể reversal</h3>
+      <div class="asset-row" *ngFor="let transaction of reversibleTransfers">
+        <span>
+          <strong>#{{ transaction.id }} · {{ transaction.amount | number: "1.0-0" }} ₫</strong>
+          <small>{{ transaction.receiverAccountNumber }} · {{ transaction.transactionTime | date: "dd/MM/yyyy HH:mm" }}</small>
+        </span>
+        <button type="button" (click)="reverseTransfer(transaction.id)" [disabled]="busy">
+          Hoàn
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section class="form-card">
+    <h3>Người thụ hưởng</h3>
+    <form (ngSubmit)="createBeneficiary()">
+      <label>Ngân hàng<input name="bankCode" [(ngModel)]="beneficiaryForm.bankCode" required /></label>
+      <label>Số tài khoản<input name="beneficiaryAccount" [(ngModel)]="beneficiaryForm.accountNumber" pattern="\d{4,30}" required /></label>
+      <label>Tên tài khoản<input name="beneficiaryName" [(ngModel)]="beneficiaryForm.accountName" required /></label>
+      <label>Gợi nhớ<input name="beneficiaryNickname" [(ngModel)]="beneficiaryForm.nickname" /></label>
+      <button class="btn primary" [disabled]="busy">Lưu người nhận</button>
+    </form>
+    <div class="asset-row" *ngFor="let beneficiary of beneficiaries">
+      <span><strong>{{ beneficiary.nickname || beneficiary.accountName }}</strong><small>{{ beneficiary.bankCode }} · {{ beneficiary.accountNumber }}</small></span>
+      <button type="button" (click)="deleteBeneficiary(beneficiary.id)">×</button>
+    </div>
+  </section>
+
+  <section class="form-card">
+    <h3>Giữ số dư</h3>
+    <form (ngSubmit)="createHold()">
+      <label
+        >Tài khoản
+        <select name="holdAccount" [(ngModel)]="holdForm.accountId" required>
+          <option *ngFor="let account of accounts" [ngValue]="account.id">
+            {{ account.accountNumber }} · khả dụng {{ account.availableBalance | number: "1.0-0" }}
+          </option>
+        </select>
+      </label>
+      <label>Số tiền<input type="number" name="holdAmount" [(ngModel)]="holdForm.amount" min="0.01" required /></label>
+      <button class="btn primary" [disabled]="busy">Tạo hold</button>
+    </form>
+    <div class="service-result" *ngFor="let hold of holds">
+      <strong>Hold #{{ hold.id }} · {{ hold.status }}</strong>
+      <p>
+        {{ hold.amount | number: "1.0-0" }} {{ hold.currency }} · tài khoản
+        #{{ hold.accountId }}
+      </p>
+      <div *ngIf="hold.status === 'HELD'">
+        <button class="btn primary" (click)="changeHold(hold, 'capture')" [disabled]="busy">
+          Capture
+        </button>
+        <button class="btn secondary" (click)="changeHold(hold, 'release')" [disabled]="busy">
+          Release
+        </button>
+      </div>
+    </div>
+  </section>
+</div>

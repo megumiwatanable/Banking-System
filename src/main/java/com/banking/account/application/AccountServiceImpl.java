@@ -8,8 +8,16 @@ import com.banking.account.api.dto.InterbankTransferResponse;
 import com.banking.account.api.dto.TransferRequest;
 import com.banking.account.api.dto.WithdrawRequest;
 import com.banking.account.domain.Account;
+import com.banking.account.domain.AccountStatus;
 import com.banking.account.infrastructure.AccountRepository;
-import com.banking.shared.error.*;
+import com.banking.ledger.domain.LedgerEntry;
+import com.banking.ledger.domain.LedgerEntryType;
+import com.banking.ledger.infrastructure.LedgerEntryRepository;
+import com.banking.shared.error.AccountLockTimeoutException;
+import com.banking.shared.error.InsufficientBalanceException;
+import com.banking.shared.error.InvalidAccountOperationException;
+import com.banking.shared.error.ResourceNotFoundException;
+import com.banking.shared.error.UnauthorizedAccessException;
 import com.banking.shared.security.SecurityUtils;
 import com.banking.transaction.domain.Transaction;
 import com.banking.transaction.domain.TransactionStatus;
@@ -17,30 +25,46 @@ import com.banking.transaction.domain.TransactionType;
 import com.banking.transaction.infrastructure.TransactionRepository;
 import com.banking.user.domain.User;
 import com.banking.user.infrastructure.UserRepository;
+import java.math.BigDecimal;
 import java.security.SecureRandom;
 import java.util.List;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AccountServiceImpl implements AccountService {
   private static final String ACCOUNT_CACHE = "accountCacheV2";
+  private static final String ALL_TRANSACTIONS_CACHE = "allTransactionsV2";
+  private static final String TRANSACTION_BY_ID_CACHE = "transactionByIdV2";
+  private static final String TRANSACTIONS_BY_ACCOUNT_CACHE = "transactionsByAccountV2";
 
   private final AccountRepository accountRepository;
   private final TransactionRepository transactionRepository;
   private final UserRepository userRepository;
-  private final SecureRandom random = new SecureRandom();
+  private final LedgerEntryRepository ledgerEntryRepository;
+  private final SecureRandom secureRandom = new SecureRandom();
 
   public AccountServiceImpl(
       AccountRepository accountRepository,
       TransactionRepository transactionRepository,
       UserRepository userRepository) {
+    this(accountRepository, transactionRepository, userRepository, null);
+  }
+
+  @Autowired
+  public AccountServiceImpl(
+      AccountRepository accountRepository,
+      TransactionRepository transactionRepository,
+      UserRepository userRepository,
+      LedgerEntryRepository ledgerEntryRepository) {
     this.accountRepository = accountRepository;
     this.transactionRepository = transactionRepository;
     this.userRepository = userRepository;
+    this.ledgerEntryRepository = ledgerEntryRepository;
   }
 
   @Override
@@ -77,19 +101,24 @@ public class AccountServiceImpl implements AccountService {
   @Override
   @Transactional
   @CacheEvict(
-      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      value = {
+        ACCOUNT_CACHE,
+        ALL_TRANSACTIONS_CACHE,
+        TRANSACTION_BY_ID_CACHE,
+        TRANSACTIONS_BY_ACCOUNT_CACHE
+      },
       allEntries = true)
   public AccountResponse deposit(Long accountId, DepositRequest request) {
     User currentUser = getCurrentUserEntity();
     Account account = getOwnedAccountForUpdate(accountId, currentUser);
 
-    account.setBalance(account.getBalance().add(request.amount()));
+    ensureActive(account);
+    BigDecimal before = account.getBalance();
+    account.setBalance(before.add(request.amount()));
     accountRepository.save(account);
 
-    Transaction transaction =
-        new Transaction(TransactionType.DEPOSIT, request.amount(), null, account);
-    transaction.setStatus(TransactionStatus.SUCCESS);
-    transactionRepository.save(transaction);
+    Transaction transaction = saveSuccessfulTransaction(TransactionType.DEPOSIT, request.amount(), null, account);
+    saveLedger(transaction, account, LedgerEntryType.CREDIT, request.amount(), before, account.getBalance());
 
     return toAccountResponse(account);
   }
@@ -97,23 +126,24 @@ public class AccountServiceImpl implements AccountService {
   @Override
   @Transactional
   @CacheEvict(
-      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      value = {
+        ACCOUNT_CACHE,
+        ALL_TRANSACTIONS_CACHE,
+        TRANSACTION_BY_ID_CACHE,
+        TRANSACTIONS_BY_ACCOUNT_CACHE
+      },
       allEntries = true)
   public AccountResponse withdraw(Long accountId, WithdrawRequest request) {
     User currentUser = getCurrentUserEntity();
     Account account = getOwnedAccountForUpdate(accountId, currentUser);
-
-    if (account.getBalance().compareTo(request.amount()) < 0) {
-      throw new InsufficientBalanceException("Insufficient balance for this withdrawal");
-    }
-
-    account.setBalance(account.getBalance().subtract(request.amount()));
+    ensureActive(account);
+    ensureSufficientBalance(account, request.amount(), "withdrawal");
+    BigDecimal before = account.getBalance();
+    account.setBalance(before.subtract(request.amount()));
     accountRepository.save(account);
 
-    Transaction transaction =
-        new Transaction(TransactionType.WITHDRAW, request.amount(), account, null);
-    transaction.setStatus(TransactionStatus.SUCCESS);
-    transactionRepository.save(transaction);
+    Transaction transaction = saveSuccessfulTransaction(TransactionType.WITHDRAW, request.amount(), account, null);
+    saveLedger(transaction, account, LedgerEntryType.DEBIT, request.amount(), before, account.getBalance());
 
     return toAccountResponse(account);
   }
@@ -121,7 +151,12 @@ public class AccountServiceImpl implements AccountService {
   @Override
   @Transactional
   @CacheEvict(
-      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      value = {
+        ACCOUNT_CACHE,
+        ALL_TRANSACTIONS_CACHE,
+        TRANSACTION_BY_ID_CACHE,
+        TRANSACTIONS_BY_ACCOUNT_CACHE
+      },
       allEntries = true)
   public AccountResponse transfer(TransferRequest request) {
     if (request.senderAccountNumber().equals(request.receiverAccountNumber())) {
@@ -134,42 +169,42 @@ public class AccountServiceImpl implements AccountService {
         accountRepository
             .findByAccountNumber(request.senderAccountNumber())
             .orElseThrow(() -> new ResourceNotFoundException("Sender account not found"));
-    if (!senderReference.getUser().getId().equals(currentUser.getId())) {
-      throw new UnauthorizedAccessException("You do not have access to this account");
-    }
+    ensureAccountOwnership(senderReference, currentUser);
 
     Account receiverReference =
         accountRepository
             .findByAccountNumber(request.receiverAccountNumber())
             .orElseThrow(() -> new ResourceNotFoundException("Receiver account not found"));
 
-    Long firstId = Math.min(senderReference.getId(), receiverReference.getId());
-    Long secondId = Math.max(senderReference.getId(), receiverReference.getId());
+    long firstId = Math.min(senderReference.getId(), receiverReference.getId());
+    long secondId = Math.max(senderReference.getId(), receiverReference.getId());
 
+    // Every transfer locks accounts in ID order so opposite-direction transfers cannot deadlock.
     Account first = lockAccountOrThrow(firstId);
     Account second = lockAccountOrThrow(secondId);
 
     Account sender = senderReference.getId().equals(firstId) ? first : second;
     Account receiver = senderReference.getId().equals(firstId) ? second : first;
 
-    if (!sender.getUser().getId().equals(currentUser.getId())) {
-      throw new UnauthorizedAccessException("You do not have access to this account");
+    ensureAccountOwnership(sender, currentUser);
+    ensureActive(sender);
+    ensureActive(receiver);
+    if (!sender.getCurrency().equals(receiver.getCurrency())) {
+      throw new InvalidAccountOperationException("Account currencies do not match");
     }
+    ensureSufficientBalance(sender, request.amount(), "transfer");
 
-    if (sender.getBalance().compareTo(request.amount()) < 0) {
-      throw new InsufficientBalanceException("Insufficient balance for this transfer");
-    }
-
-    sender.setBalance(sender.getBalance().subtract(request.amount()));
-    receiver.setBalance(receiver.getBalance().add(request.amount()));
+    BigDecimal senderBefore = sender.getBalance();
+    BigDecimal receiverBefore = receiver.getBalance();
+    sender.setBalance(senderBefore.subtract(request.amount()));
+    receiver.setBalance(receiverBefore.add(request.amount()));
 
     accountRepository.save(sender);
     accountRepository.save(receiver);
 
-    Transaction transaction =
-        new Transaction(TransactionType.TRANSFER, request.amount(), sender, receiver);
-    transaction.setStatus(TransactionStatus.SUCCESS);
-    transactionRepository.save(transaction);
+    Transaction transaction = saveSuccessfulTransaction(TransactionType.INTERNAL_TRANSFER, request.amount(), sender, receiver);
+    saveLedger(transaction, sender, LedgerEntryType.DEBIT, request.amount(), senderBefore, sender.getBalance());
+    saveLedger(transaction, receiver, LedgerEntryType.CREDIT, request.amount(), receiverBefore, receiver.getBalance());
 
     return toAccountResponse(sender);
   }
@@ -177,7 +212,12 @@ public class AccountServiceImpl implements AccountService {
   @Override
   @Transactional
   @CacheEvict(
-      value = {ACCOUNT_CACHE, "allTransactionsV2", "transactionByIdV2", "transactionsByAccountV2"},
+      value = {
+        ACCOUNT_CACHE,
+        ALL_TRANSACTIONS_CACHE,
+        TRANSACTION_BY_ID_CACHE,
+        TRANSACTIONS_BY_ACCOUNT_CACHE
+      },
       allEntries = true)
   public InterbankTransferResponse requestInterbankTransfer(InterbankTransferRequest request) {
     User currentUser = getCurrentUserEntity();
@@ -185,10 +225,9 @@ public class AccountServiceImpl implements AccountService {
         accountRepository
             .findByAccountNumber(request.senderAccountNumber())
             .orElseThrow(() -> new ResourceNotFoundException("Sender account not found"));
-    if (!sender.getUser().getId().equals(currentUser.getId())) {
-      throw new UnauthorizedAccessException("You do not have access to this account");
-    }
+    ensureAccountOwnership(sender, currentUser);
 
+    // This endpoint records a simulated payment instruction; no balance is debited yet.
     Transaction transaction =
         new Transaction(TransactionType.INTERBANK_TRANSFER, request.amount(), sender, null);
     transaction.setExternalBankCode(request.bankCode().trim().toUpperCase());
@@ -214,9 +253,7 @@ public class AccountServiceImpl implements AccountService {
                 () -> new ResourceNotFoundException("Account not found with id: " + accountId));
 
     User currentUser = getCurrentUserEntity();
-    if (!account.getUser().getId().equals(currentUser.getId())) {
-      throw new UnauthorizedAccessException("You do not have access to this account");
-    }
+    ensureAccountOwnership(account, currentUser);
 
     return account;
   }
@@ -224,9 +261,7 @@ public class AccountServiceImpl implements AccountService {
   private Account getOwnedAccountForUpdate(Long accountId, User currentUser) {
     Account account = lockAccountOrThrow(accountId);
 
-    if (!account.getUser().getId().equals(currentUser.getId())) {
-      throw new UnauthorizedAccessException("You do not have access to this account");
-    }
+    ensureAccountOwnership(account, currentUser);
 
     return account;
   }
@@ -237,7 +272,7 @@ public class AccountServiceImpl implements AccountService {
           .findByIdForUpdate(accountId)
           .orElseThrow(
               () -> new ResourceNotFoundException("Account not found with id: " + accountId));
-    } catch (PessimisticLockingFailureException e) {
+    } catch (PessimisticLockingFailureException exception) {
       throw new AccountLockTimeoutException(
           "Account " + accountId + " is currently locked by another operation");
     }
@@ -253,7 +288,8 @@ public class AccountServiceImpl implements AccountService {
   private String generateUniqueAccountNumber() {
     String accountNumber;
     do {
-      long candidate = 1_000_000_000L + (long) (random.nextDouble() * 9_000_000_000L);
+      long candidate =
+          1_000_000_000L + (long) (secureRandom.nextDouble() * 9_000_000_000L);
       accountNumber = String.valueOf(candidate);
     } while (accountRepository.existsByAccountNumber(accountNumber));
 
@@ -265,6 +301,45 @@ public class AccountServiceImpl implements AccountService {
         account.getId(),
         account.getAccountNumber(),
         account.getAccountType(),
-        account.getBalance());
+        account.getBalance(),
+        account.getAvailableBalance(),
+        account.getHoldAmount(),
+        account.getCurrency(),
+        account.getStatus());
+  }
+
+  private void ensureAccountOwnership(Account account, User user) {
+    if (!account.getUser().getId().equals(user.getId())) {
+      throw new UnauthorizedAccessException("You do not have access to this account");
+    }
+  }
+
+  private void ensureSufficientBalance(
+      Account account, BigDecimal amount, String operation) {
+    if (account.getAvailableBalance().compareTo(amount) < 0) {
+      throw new InsufficientBalanceException(
+          "Insufficient balance for this " + operation);
+    }
+  }
+
+  private Transaction saveSuccessfulTransaction(
+      TransactionType type, BigDecimal amount, Account sender, Account receiver) {
+    Transaction transaction = new Transaction(type, amount, sender, receiver);
+    transaction.setStatus(TransactionStatus.SUCCESS);
+    return transactionRepository.save(transaction);
+  }
+
+  private void ensureActive(Account account) {
+    if (account.getStatus() != AccountStatus.ACTIVE) {
+      throw new InvalidAccountOperationException("Account is not active");
+    }
+  }
+
+  private void saveLedger(Transaction transaction, Account account, LedgerEntryType type,
+      BigDecimal amount, BigDecimal before, BigDecimal after) {
+    if (ledgerEntryRepository != null) {
+      ledgerEntryRepository.save(new LedgerEntry(transaction, account, type, amount,
+          account.getCurrency(), before, after));
+    }
   }
 }

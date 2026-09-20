@@ -25,6 +25,21 @@ public class Transaction {
   @Column(nullable = false, precision = 19, scale = 2)
   private BigDecimal amount;
 
+  @Column(nullable = false, length = 3)
+  private String currency = "VND";
+
+  @Column(nullable = false, precision = 19, scale = 2)
+  private BigDecimal fee = BigDecimal.ZERO;
+
+  private String description;
+
+  @Column(unique = true)
+  private String idempotencyKey;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  @JoinColumn(name = "original_transaction_id")
+  private Transaction originalTransaction;
+
   @Column(nullable = false, updatable = false)
   private LocalDateTime transactionTime;
 

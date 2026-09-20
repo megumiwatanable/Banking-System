@@ -1,0 +1,11 @@
+# Project-scoped Codex configuration. This file is loaded only when Codex works
+# inside this trusted repository.
+
+[mcp_servers.banking_filesystem]
+command = "npx"
+args = ["--yes", "@modelcontextprotocol/server-filesystem", "."]
+cwd = "."
+startup_timeout_sec = 30
+
+[mcp_servers.banking_filesystem.env]
+NPM_CONFIG_CACHE = ".codex/npm-cache"

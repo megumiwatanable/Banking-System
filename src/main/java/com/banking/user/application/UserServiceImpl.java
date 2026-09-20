@@ -51,7 +51,7 @@ public class UserServiceImpl implements UserService {
     try {
       User saved = userRepository.save(user);
       return toUserResponse(saved);
-    } catch (DataIntegrityViolationException e) {
+    } catch (DataIntegrityViolationException exception) {
       throw new ResourceAlreadyExistsException(
           "An account with email " + request.email() + " already exists");
     }

@@ -30,6 +30,12 @@ public class User {
   @JsonIgnore
   private String password;
 
+  @Enumerated(EnumType.STRING) @Column(nullable = false)
+  private UserRole role = UserRole.CUSTOMER;
+
+  @Enumerated(EnumType.STRING) @Column(nullable = false)
+  private UserStatus status = UserStatus.ACTIVE;
+
   @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
   private List<Account> accounts = new ArrayList<>();
 
