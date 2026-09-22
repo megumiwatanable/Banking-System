@@ -17,6 +17,7 @@ import com.banking.transaction.infrastructure.TransactionRepository;
 import com.banking.transfer.api.dto.InternalTransferRequest;
 import com.banking.transfer.api.dto.TransferResult;
 import com.banking.transfer.domain.IdempotencyRecord;
+import com.banking.transfer.event.TransferEventPublisher;
 import com.banking.transfer.infrastructure.IdempotencyRecordRepository;
 import com.banking.user.domain.User;
 import com.banking.user.domain.UserStatus;
@@ -35,6 +36,7 @@ public class InternalTransferService {
   private final IdempotencyRecordRepository idempotencyRepository;
   private final TransferRequestHasher requestHasher;
   private final TransferPolicy transferPolicy;
+  private final TransferEventPublisher transferEventPublisher;
 
   public InternalTransferService(
       AccountRepository accountRepository,
@@ -43,7 +45,8 @@ public class InternalTransferService {
       UserRepository userRepository,
       IdempotencyRecordRepository idempotencyRepository,
       TransferRequestHasher requestHasher,
-      TransferPolicy transferPolicy) {
+      TransferPolicy transferPolicy,
+      TransferEventPublisher transferEventPublisher) {
     this.accountRepository = accountRepository;
     this.transactionRepository = transactionRepository;
     this.ledgerRepository = ledgerRepository;
@@ -51,6 +54,7 @@ public class InternalTransferService {
     this.idempotencyRepository = idempotencyRepository;
     this.requestHasher = requestHasher;
     this.transferPolicy = transferPolicy;
+    this.transferEventPublisher = transferEventPublisher;
   }
 
   @Transactional
@@ -79,6 +83,7 @@ public class InternalTransferService {
     marker.setTransaction(transaction);
     marker.setStatus("SUCCESS");
     idempotencyRepository.save(marker);
+    transferEventPublisher.publishCompleted(transaction);
     return toResult(transaction);
   }
 

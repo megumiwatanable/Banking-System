@@ -11,6 +11,7 @@ import com.banking.transaction.domain.*;
 import com.banking.transaction.infrastructure.TransactionRepository;
 import com.banking.transfer.api.dto.InternalTransferRequest;
 import com.banking.transfer.domain.IdempotencyRecord;
+import com.banking.transfer.event.TransferEventPublisher;
 import com.banking.transfer.infrastructure.*;
 import com.banking.user.domain.*;
 import com.banking.user.infrastructure.UserRepository;
@@ -26,6 +27,7 @@ class InternalTransferServiceTest {
   private IdempotencyRecordRepository idempotency;
   private TransferRequestHasher requestHasher;
   private TransferPolicy transferPolicy;
+  private TransferEventPublisher transferEventPublisher;
   private InternalTransferService service;
 
   @BeforeEach void setUp() {
@@ -34,6 +36,7 @@ class InternalTransferServiceTest {
     idempotency = mock(IdempotencyRecordRepository.class);
     requestHasher = mock(TransferRequestHasher.class);
     transferPolicy = mock(TransferPolicy.class);
+    transferEventPublisher = mock(TransferEventPublisher.class);
     service =
         new InternalTransferService(
             accounts,
@@ -42,7 +45,8 @@ class InternalTransferServiceTest {
             users,
             idempotency,
             requestHasher,
-            transferPolicy);
+            transferPolicy,
+            transferEventPublisher);
   }
 
   @Test void rejectsSameIdempotencyKeyWithDifferentPayload() {
@@ -56,7 +60,8 @@ class InternalTransferServiceTest {
       assertThatThrownBy(() -> service.transfer("key-1",request("1000000001","1000000002")))
           .isInstanceOf(InvalidTransactionException.class).hasMessageContaining("different request");
     }
-    verifyNoInteractions(accounts, transactions, ledger, transferPolicy);
+    verifyNoInteractions(
+        accounts, transactions, ledger, transferPolicy, transferEventPublisher);
   }
 
   @Test void rejectsInactiveCustomerBeforeTouchingAccounts() {
@@ -67,7 +72,13 @@ class InternalTransferServiceTest {
       assertThatThrownBy(() -> service.transfer("key-1",request("1000000001","1000000002")))
           .isInstanceOf(UnauthorizedAccessException.class).hasMessageContaining("not active");
     }
-    verifyNoInteractions(accounts, transactions, ledger, idempotency, transferPolicy);
+    verifyNoInteractions(
+        accounts,
+        transactions,
+        ledger,
+        idempotency,
+        transferPolicy,
+        transferEventPublisher);
   }
 
   private User user(UserStatus status) {
